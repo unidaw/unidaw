@@ -32,18 +32,19 @@ use std::sync::atomic::fence;
 use std::sync::atomic::AtomicU32;
 
 use crate::layout::{
-    EventEntry, EventType, RingHeader, ShmHeader, UiAudioSourceRegion, UiAutomationLaneRegion,
-    UiAutomationLaneRequestPayload, UiAutomationSlotRegion, UiChordCommandPayload, UiClipExtent,
-    UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot, UiCommandOutcomeRegion,
-    UiCommandPayload, UiCommandType, UiDeviceParamsRegion, UiHarmonyEvent, UiHarmonySnapshot,
-    UiPatcherEdge, UiPatcherGraphCommandPayload, UiPatcherNode, UiPatcherNodeConfigPayload,
-    UiPatcherRegion, UiScaleRegion, UiWaveformRegion, UiWaveformRequestPayload, K_SHM_MAGIC,
-    K_SHM_VERSION, K_UI_AUTOMATION_SLOTS, K_UI_COMMAND_OUTCOME_CAPACITY, K_UI_MAX_AUDIO_CLIPS,
-    K_UI_MAX_AUDIO_SOURCES, K_UI_MAX_AUTOMATION_LANES, K_UI_MAX_AUTOMATION_POINTS,
-    K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_DEVICE_PARAMS, K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES,
-    K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES, K_UI_MAX_SCALE_STEPS, K_UI_MAX_TRACKS,
-    K_UI_WAVEFORM_MAX_PAIRS, K_UI_WAVEFORM_SLOTS, UI_AUTOMATION_FLAG_DISCRETE,
-    UI_COMMAND_OUTCOME_COMPLETED, UI_COMMAND_OUTCOME_REASON_NONE,
+    BlockMailbox, EventEntry, EventType, RingHeader, ShmHeader, UiAudioSourceRegion,
+    UiAutomationLaneRegion, UiAutomationLaneRequestPayload, UiAutomationSlotRegion,
+    UiChordCommandPayload, UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload,
+    UiClipWindowSnapshot, UiCommandOutcomeRegion, UiCommandPayload, UiCommandType,
+    UiDeviceParamsRegion, UiEditBatchEntry, UiHarmonyEvent, UiHarmonySnapshot, UiPatcherEdge,
+    UiPatcherGraphCommandPayload, UiPatcherNode, UiPatcherNodeConfigPayload, UiPatcherRegion,
+    UiScaleRegion, UiWaveformRegion, UiWaveformRequestPayload, K_SHM_MAGIC, K_SHM_VERSION,
+    K_UI_AUTOMATION_SLOTS, K_UI_COMMAND_OUTCOME_CAPACITY, K_UI_EDIT_BATCH_CAPACITY,
+    K_UI_MAX_AUDIO_CLIPS, K_UI_MAX_AUDIO_SOURCES, K_UI_MAX_AUTOMATION_LANES,
+    K_UI_MAX_AUTOMATION_POINTS, K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_DEVICE_PARAMS,
+    K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES,
+    K_UI_MAX_SCALE_STEPS, K_UI_MAX_TRACKS, K_UI_WAVEFORM_MAX_PAIRS, K_UI_WAVEFORM_SLOTS,
+    UI_AUTOMATION_FLAG_DISCRETE, UI_COMMAND_OUTCOME_COMPLETED, UI_COMMAND_OUTCOME_REASON_NONE,
     UI_COMMAND_OUTCOME_REASON_STALE_BASE, UI_COMMAND_OUTCOME_REASON_UNKNOWN_TRACK,
     UI_COMMAND_OUTCOME_REFUSED, UI_COMMAND_OUTCOME_STATUS_NORMAL,
     UI_COMMAND_OUTCOME_STATUS_SEQUENCE_EXHAUSTED,
@@ -324,7 +325,6 @@ pub struct SamplerKitView {
     pub slots: Vec<crate::layout::UiSamplerSlotEntry>,
 }
 
-
 /// `pairs` is channel-planar then column then (min,max): for channel c column i,
 /// pairs[(c*columns + i)*2] and +1. `status`: 0 ok, 1 truncated, 2 notready, 3 bad.
 #[derive(Debug, Clone, Default)]
@@ -441,6 +441,201 @@ struct RingView {
     mask: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+enum UiRegionId {
+    AudioIn,
+    AudioOut,
+    RingStd,
+    RingCtrl,
+    RingUi,
+    RingUiOut,
+    RingUiEdit,
+    Mailbox,
+    UiClip,
+    UiHarmony,
+    UiClipAll,
+    RingUiAgent,
+    UiClipExtent,
+    UiPatcher,
+    UiArrange,
+    UiAutomation,
+    UiAutomationSlot,
+    UiDeviceMeter,
+    UiScales,
+    UiDeviceParams,
+    UiAudioSource,
+    UiWaveform,
+    UiSamplerKit,
+    UiSamplerEnvelope,
+    UiCommandOutcome,
+    Count,
+}
+
+const UI_SHM_REGION_COUNT: usize = UiRegionId::Count as usize;
+const UI_SHM_LAYOUT_ALIGNMENT: usize = 64;
+
+#[derive(Clone, Copy, Default)]
+struct UiShmDescriptor {
+    num_channels_in: u32,
+    num_channels_out: u32,
+    num_blocks: u32,
+    channel_stride_bytes: u32,
+    audio_in_offset: u64,
+    audio_out_offset: u64,
+    ring_std_offset: u64,
+    ring_ctrl_offset: u64,
+    ring_ui_offset: u64,
+    ring_ui_out_offset: u64,
+    ring_ui_edit_offset: u64,
+    mailbox_offset: u64,
+    ui_clip_offset: u64,
+    ui_clip_bytes: u64,
+    ui_harmony_offset: u64,
+    ui_harmony_bytes: u64,
+    ui_clip_all_offset: u64,
+    ui_clip_all_bytes: u64,
+    ring_ui_agent_offset: u64,
+    ui_clip_extent_offset: u64,
+    ui_patcher_offset: u64,
+    ui_arrange_offset: u64,
+    ui_arrange_bytes: u64,
+    ui_automation_offset: u64,
+    ui_automation_bytes: u64,
+    ui_automation_slot_offset: u64,
+    ui_automation_slot_bytes: u64,
+    ui_device_meter_offset: u64,
+    ui_scales_offset: u64,
+    ui_device_params_offset: u64,
+    ui_audio_source_offset: u64,
+    ui_waveform_offset: u64,
+    ui_sampler_kit_offset: u64,
+    ui_sampler_kit_bytes: u64,
+    ui_sampler_envelope_offset: u64,
+    ui_sampler_envelope_bytes: u64,
+    ui_command_outcome_offset: u64,
+    ui_command_outcome_bytes: u64,
+}
+
+impl UiShmDescriptor {
+    unsafe fn read(header: *const ShmHeader) -> Self {
+        macro_rules! field {
+            ($name:ident) => {
+                unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*header).$name)) }
+            };
+        }
+        Self {
+            num_channels_in: field!(num_channels_in),
+            num_channels_out: field!(num_channels_out),
+            num_blocks: field!(num_blocks),
+            channel_stride_bytes: field!(channel_stride_bytes),
+            audio_in_offset: field!(audio_in_offset),
+            audio_out_offset: field!(audio_out_offset),
+            ring_std_offset: field!(ring_std_offset),
+            ring_ctrl_offset: field!(ring_ctrl_offset),
+            ring_ui_offset: field!(ring_ui_offset),
+            ring_ui_out_offset: field!(ring_ui_out_offset),
+            ring_ui_edit_offset: field!(ring_ui_edit_offset),
+            mailbox_offset: field!(mailbox_offset),
+            ui_clip_offset: field!(ui_clip_offset),
+            ui_clip_bytes: field!(ui_clip_bytes),
+            ui_harmony_offset: field!(ui_harmony_offset),
+            ui_harmony_bytes: field!(ui_harmony_bytes),
+            ui_clip_all_offset: field!(ui_clip_all_offset),
+            ui_clip_all_bytes: field!(ui_clip_all_bytes),
+            ring_ui_agent_offset: field!(ring_ui_agent_offset),
+            ui_clip_extent_offset: field!(ui_clip_extent_offset),
+            ui_patcher_offset: field!(ui_patcher_offset),
+            ui_arrange_offset: field!(ui_arrange_offset),
+            ui_arrange_bytes: field!(ui_arrange_bytes),
+            ui_automation_offset: field!(ui_automation_offset),
+            ui_automation_bytes: field!(ui_automation_bytes),
+            ui_automation_slot_offset: field!(ui_automation_slot_offset),
+            ui_automation_slot_bytes: field!(ui_automation_slot_bytes),
+            ui_device_meter_offset: field!(ui_device_meter_offset),
+            ui_scales_offset: field!(ui_scales_offset),
+            ui_device_params_offset: field!(ui_device_params_offset),
+            ui_audio_source_offset: field!(ui_audio_source_offset),
+            ui_waveform_offset: field!(ui_waveform_offset),
+            ui_sampler_kit_offset: field!(ui_sampler_kit_offset),
+            ui_sampler_kit_bytes: field!(ui_sampler_kit_bytes),
+            ui_sampler_envelope_offset: field!(ui_sampler_envelope_offset),
+            ui_sampler_envelope_bytes: field!(ui_sampler_envelope_bytes),
+            ui_command_outcome_offset: field!(ui_command_outcome_offset),
+            ui_command_outcome_bytes: field!(ui_command_outcome_bytes),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ValidatedUiShmLayout {
+    offsets: [usize; UI_SHM_REGION_COUNT],
+    sizes: [usize; UI_SHM_REGION_COUNT],
+}
+
+impl ValidatedUiShmLayout {
+    fn offset(&self, id: UiRegionId) -> u64 {
+        self.offsets[id as usize] as u64
+    }
+
+    fn size(&self, id: UiRegionId) -> usize {
+        self.sizes[id as usize]
+    }
+
+    #[cfg(test)]
+    fn empty_fixture() -> Self {
+        Self {
+            offsets: [0; UI_SHM_REGION_COUNT],
+            sizes: [0; UI_SHM_REGION_COUNT],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RingLayout {
+    offset: usize,
+    entries_offset: usize,
+    capacity: u32,
+    entry_size: usize,
+    bytes: usize,
+}
+
+impl RingLayout {
+    fn event_view(self, base: *mut u8) -> RingView {
+        debug_assert_eq!(self.entry_size, std::mem::size_of::<EventEntry>());
+        debug_assert!(self.capacity.is_power_of_two());
+        let header = unsafe { base.add(self.offset) as *mut RingHeader };
+        let entries = header as *mut u8;
+        RingView {
+            header,
+            entries: unsafe { entries.add(self.entries_offset) as *mut EventEntry },
+            mask: self.capacity - 1,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ValidatedUiShmAttach {
+    layout: ValidatedUiShmLayout,
+    ring_ui: RingLayout,
+    ring_ui_out: RingLayout,
+    ring_ui_agent: RingLayout,
+}
+
+#[derive(Clone, Copy)]
+struct RegionSpan {
+    name: &'static str,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Clone, Copy)]
+enum RingKind {
+    Inactive,
+    Event,
+    Edit,
+}
+
 // A read-only attach maps with `map`; only a writable attach may use
 // `map_mut`, which needs the descriptor opened O_RDWR.
 enum Mapping {
@@ -460,6 +655,7 @@ impl Mapping {
 pub struct EngineHandle {
     _mmap: Mapping,
     header: *const ShmHeader,
+    layout: ValidatedUiShmLayout,
     // AE-P1.3. The mapped length, kept so a region offset out of the header can be checked against
     // something. Without it the only available shape was passing the length as a parameter, which
     // works for the rings because they are built inside attach_inner and reaches none of the
@@ -527,49 +723,31 @@ impl EngineHandle {
                 K_SHM_MAGIC, K_SHM_VERSION
             ));
         }
-        let ring_offset = unsafe {
-            if agent_ring {
-                (*header).ring_ui_agent_offset
-            } else {
-                (*header).ring_ui_offset
-            }
+        let descriptor = unsafe { UiShmDescriptor::read(header) };
+        let validated = validate_ui_shm_layout(mmap.as_ptr() as *mut u8, descriptor, size as usize)
+            .map_err(|error| format!("invalid UI shared-memory layout: {error}"))?;
+        let selected_ring = if agent_ring {
+            validated.ring_ui_agent
+        } else {
+            validated.ring_ui
         };
         let ring_ui = if writable {
-            ring_view(mmap.as_ptr() as *mut u8, ring_offset, size as usize)
+            Some(selected_ring.event_view(mmap.as_ptr() as *mut u8))
         } else {
             None
         };
         // THE OUTBOUND RING, mapped even on a read-only attach. It is the engine's diff channel
         // and this side only ever PEEKS it — see peek_ui_diffs for why it must never drain.
-        let ring_ui_out = ring_view(
-            mmap.as_ptr() as *mut u8,
-            unsafe { (*header).ring_ui_out_offset },
-            size as usize,
-        );
-        let command_outcomes = {
-            let offset = unsafe { (*header).ui_command_outcome_offset };
-            let bytes = unsafe { (*header).ui_command_outcome_bytes };
-            if bytes != std::mem::size_of::<UiCommandOutcomeRegion>() as u64 {
-                None
-            } else {
-                let offset = usize::try_from(offset).ok();
-                offset.and_then(|offset| {
-                    if region_fits(
-                        offset,
-                        std::mem::size_of::<UiCommandOutcomeRegion>(),
-                        std::mem::align_of::<UiCommandOutcomeRegion>(),
-                        size as usize,
-                    ) {
-                        Some(unsafe { mmap.as_ptr().add(offset) as *const UiCommandOutcomeRegion })
-                    } else {
-                        None
-                    }
-                })
-            }
-        };
+        let ring_ui_out = Some(validated.ring_ui_out.event_view(mmap.as_ptr() as *mut u8));
+        let command_outcomes = Some(unsafe {
+            mmap.as_ptr()
+                .add(validated.layout.offsets[UiRegionId::UiCommandOutcome as usize])
+                as *const UiCommandOutcomeRegion
+        });
         Ok(Self {
             _mmap: mmap,
             header,
+            layout: validated.layout,
             size: size as usize,
             ring_ui,
             ring_ui_out,
@@ -664,7 +842,7 @@ impl EngineHandle {
         let ring = self.ring_ui_out.as_ref()?;
         unsafe {
             Some((
-                (*ring.header).capacity,
+                ring.mask + 1,
                 (*ring.header).read_index.load(Ordering::Relaxed),
                 (*ring.header).write_index.load(Ordering::Relaxed),
             ))
@@ -725,7 +903,12 @@ impl EngineHandle {
                 || entry.event_type == EventType::UiChordDiff as u16;
             if entry.ready != 0 && is_diff {
                 let diff_type = u16::from_le_bytes([entry.payload[0], entry.payload[1]]);
-                out.push((entry.event_type, diff_type, entry.sample_time, entry.payload));
+                out.push((
+                    entry.event_type,
+                    diff_type,
+                    entry.sample_time,
+                    entry.payload,
+                ));
             }
             // Masked, for the reason spelled out in peek_ui_diffs below: these indices are SLOT
             // NUMBERS, and advancing unmasked ran the loop until u32 wrapped.
@@ -798,7 +981,14 @@ impl EngineHandle {
         unsafe {
             let block = std::ptr::read_volatile(&(*self.header).block_size);
             let rate = std::ptr::read_volatile(&(*self.header).sample_rate);
-            (block, if rate.is_finite() && rate > 0.0 { rate.round() as u32 } else { 0 })
+            (
+                block,
+                if rate.is_finite() && rate > 0.0 {
+                    rate.round() as u32
+                } else {
+                    0
+                },
+            )
         }
     }
 
@@ -843,11 +1033,7 @@ impl EngineHandle {
     /// Found from a live report: asking the agent for a key change across four bars produced
     /// "refused an edit composed against version" several times over and landed two of the four.
     /// Each tool call re-read the counter correctly; the counter simply had not moved yet.
-    pub fn wait_for_harmony_version(
-        &self,
-        base: u32,
-        timeout: std::time::Duration,
-    ) -> bool {
+    pub fn wait_for_harmony_version(&self, base: u32, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             if self.harmony_version() != base {
@@ -928,9 +1114,9 @@ impl EngineHandle {
             std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
         );
         while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
-            let offset = unsafe { (*self.header).ui_clip_offset };
-            let bytes = unsafe { (*self.header).ui_clip_bytes };
-            if offset == 0 || bytes < std::mem::size_of::<UiClipWindowSnapshot>() as u64 {
+            let offset = self.layout.offset(UiRegionId::UiClip);
+            let bytes = self.layout.size(UiRegionId::UiClip);
+            if offset == 0 || bytes < std::mem::size_of::<UiClipWindowSnapshot>() {
                 return None;
             }
             let Some(snapshot_ptr) = self.region::<UiClipWindowSnapshot>(offset) else {
@@ -960,9 +1146,9 @@ impl EngineHandle {
             std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
         );
         while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
-            let offset = unsafe { (*self.header).ui_clip_all_offset };
-            let bytes = unsafe { (*self.header).ui_clip_all_bytes };
-            if offset == 0 || (bytes as usize) < stride * K_UI_MAX_TRACKS {
+            let offset = self.layout.offset(UiRegionId::UiClipAll);
+            let bytes = self.layout.size(UiRegionId::UiClipAll);
+            if offset == 0 || bytes < stride * K_UI_MAX_TRACKS {
                 return None;
             }
             // THE WHOLE ARRAY, not one element: `base.add(track_id)` reaches the last track.
@@ -988,14 +1174,14 @@ impl EngineHandle {
     /// engine used to leave the old version standing for the whole duration of the rewrite.
     /// Returns None while a write is in flight or the region is absent.
     pub fn read_arrange_summary(&self) -> Option<crate::layout::UiArrangeSummaryRegion> {
-        let offset = unsafe { (*self.header).ui_arrange_offset };
-        let bytes = unsafe { (*self.header).ui_arrange_bytes };
-        if offset == 0
-            || (bytes as usize) < std::mem::size_of::<crate::layout::UiArrangeSummaryRegion>()
-        {
+        let offset = self.layout.offset(UiRegionId::UiArrange);
+        let bytes = self.layout.size(UiRegionId::UiArrange);
+        if offset == 0 || bytes < std::mem::size_of::<crate::layout::UiArrangeSummaryRegion>() {
             return None;
         }
-        let Some(base) = self.region::<crate::layout::UiArrangeSummaryRegion>(offset) else { return None; };
+        let Some(base) = self.region::<crate::layout::UiArrangeSummaryRegion>(offset) else {
+            return None;
+        };
         for _ in 0..64 {
             let v0 = unsafe { std::ptr::read_volatile(&(*base).version) };
             // 0 means a write is IN FLIGHT. Without this the read was not torn-safe at all,
@@ -1033,11 +1219,13 @@ impl EngineHandle {
             std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
         );
         while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
-            let offset = unsafe { (*self.header).ui_clip_extent_offset };
+            let offset = self.layout.offset(UiRegionId::UiClipExtent);
             if offset == 0 {
                 return (Vec::new(), 0);
             }
-            let Some(region) = self.region::<UiClipExtentRegion>(offset) else { return (Vec::new(), 0); };
+            let Some(region) = self.region::<UiClipExtentRegion>(offset) else {
+                return (Vec::new(), 0);
+            };
             let count = unsafe { (*region).count as usize }.min(K_UI_MAX_CLIP_EXTENTS);
             let truncated = unsafe { (*region).truncated };
             let mut out = Vec::with_capacity(count);
@@ -1076,20 +1264,24 @@ impl EngineHandle {
     /// 0 from an engine that predates the field, which never matches a cache and so reads as
     /// "always stale" — slower, never wrong.
     pub fn harmony_region_version(&self) -> u32 {
-        let off = unsafe { (*self.header).ui_harmony_offset };
+        let off = self.layout.offset(UiRegionId::UiHarmony);
         if off == 0 {
             return 0;
         }
-        let Some(snap) = self.region::<UiHarmonySnapshot>(off) else { return 0; };
+        let Some(snap) = self.region::<UiHarmonySnapshot>(off) else {
+            return 0;
+        };
         unsafe { std::ptr::read_volatile(&(*snap).version) }
     }
 
     pub fn harmony_event_count(&self) -> u32 {
-        let off = unsafe { (*self.header).ui_harmony_offset };
+        let off = self.layout.offset(UiRegionId::UiHarmony);
         if off == 0 {
             return 0;
         }
-        let Some(snap) = self.region::<UiHarmonySnapshot>(off) else { return 0; };
+        let Some(snap) = self.region::<UiHarmonySnapshot>(off) else {
+            return 0;
+        };
         (unsafe { (*snap).event_count }).min(K_UI_MAX_HARMONY_EVENTS as u32)
     }
 
@@ -1098,13 +1290,14 @@ impl EngineHandle {
             std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
         );
         while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
-            let off = unsafe { (*self.header).ui_harmony_offset };
+            let off = self.layout.offset(UiRegionId::UiHarmony);
             if off == 0 {
                 return Vec::new();
             }
-            let Some(snap) = self.region::<UiHarmonySnapshot>(off) else { return Vec::new(); };
-            let count =
-                (unsafe { (*snap).event_count } as usize).min(K_UI_MAX_HARMONY_EVENTS);
+            let Some(snap) = self.region::<UiHarmonySnapshot>(off) else {
+                return Vec::new();
+            };
+            let count = (unsafe { (*snap).event_count } as usize).min(K_UI_MAX_HARMONY_EVENTS);
             let mut out = Vec::with_capacity(count);
             for i in 0..count {
                 out.push(unsafe { (*snap).events[i] });
@@ -1157,11 +1350,13 @@ impl EngineHandle {
 
     /// The published patcher-version counter (moves on any patcher edit).
     pub fn patcher_version(&self) -> u32 {
-        let off = unsafe { (*self.header).ui_patcher_offset };
+        let off = self.layout.offset(UiRegionId::UiPatcher);
         if off == 0 {
             return 0;
         }
-        let Some(region) = self.region::<UiPatcherRegion>(off) else { return 0; };
+        let Some(region) = self.region::<UiPatcherRegion>(off) else {
+            return 0;
+        };
         unsafe { std::ptr::read_volatile(&(*region).version) }
     }
 
@@ -1172,15 +1367,15 @@ impl EngineHandle {
             std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
         );
         while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
-            let off = unsafe { (*self.header).ui_patcher_offset };
+            let off = self.layout.offset(UiRegionId::UiPatcher);
             if off == 0 {
                 return PatcherView::default();
             }
-            let Some(region) = self.region::<UiPatcherRegion>(off) else { return PatcherView::default(); };
-            let nodes_n =
-                (unsafe { (*region).node_count } as usize).min(K_UI_MAX_PATCHER_NODES);
-            let edges_n =
-                (unsafe { (*region).edge_count } as usize).min(K_UI_MAX_PATCHER_EDGES);
+            let Some(region) = self.region::<UiPatcherRegion>(off) else {
+                return PatcherView::default();
+            };
+            let nodes_n = (unsafe { (*region).node_count } as usize).min(K_UI_MAX_PATCHER_NODES);
+            let edges_n = (unsafe { (*region).edge_count } as usize).min(K_UI_MAX_PATCHER_EDGES);
             let mut view = PatcherView {
                 version: unsafe { (*region).version },
                 device_id: unsafe { (*region).device_id },
@@ -1206,11 +1401,13 @@ impl EngineHandle {
     /// The engine's scale registry (v16). Written once at startup and immutable,
     /// so this is a plain read — no seqlock needed. Empty if not published.
     pub fn read_scales(&self) -> Vec<ScaleView> {
-        let off = unsafe { (*self.header).ui_scales_offset };
+        let off = self.layout.offset(UiRegionId::UiScales);
         if off == 0 {
             return Vec::new();
         }
-        let Some(region) = self.region::<UiScaleRegion>(off) else { return Vec::new(); };
+        let Some(region) = self.region::<UiScaleRegion>(off) else {
+            return Vec::new();
+        };
         let n = (unsafe { (*region).scaleCount } as usize).min(K_UI_MAX_SCALES);
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
@@ -1231,11 +1428,13 @@ impl EngineHandle {
     /// The device-params region (v17), refreshed by RequestDeviceParams. `version`
     /// bumps per publish; poll it after sending the request. Empty if not published.
     pub fn read_device_params(&self) -> DeviceParamsView {
-        let off = unsafe { (*self.header).ui_device_params_offset };
+        let off = self.layout.offset(UiRegionId::UiDeviceParams);
         if off == 0 {
             return DeviceParamsView::default();
         }
-        let Some(region) = self.region::<UiDeviceParamsRegion>(off) else { return DeviceParamsView::default(); };
+        let Some(region) = self.region::<UiDeviceParamsRegion>(off) else {
+            return DeviceParamsView::default();
+        };
         let n = (unsafe { (*region).paramCount } as usize).min(K_UI_MAX_DEVICE_PARAMS);
         let mut view = DeviceParamsView {
             version: unsafe { (*region).version },
@@ -1270,18 +1469,19 @@ impl EngineHandle {
     /// region is version-gated and rewritten only at project load; a version double-
     /// check rejects a torn read against a concurrent load.
     pub fn read_audio_sources(&self) -> AudioSourcesView {
-        let off = unsafe { (*self.header).ui_audio_source_offset };
+        let off = self.layout.offset(UiRegionId::UiAudioSource);
         if off == 0 {
             return AudioSourcesView::default();
         }
-        let Some(region) = self.region::<UiAudioSourceRegion>(off) else { return AudioSourcesView::default(); };
+        let Some(region) = self.region::<UiAudioSourceRegion>(off) else {
+            return AudioSourcesView::default();
+        };
         let ver_ptr = unsafe { std::ptr::addr_of!((*region).version) } as *const AtomicU32;
         for _ in 0..256 {
             let v0 = unsafe { (*ver_ptr).load(Ordering::Acquire) };
             let source_count =
                 (unsafe { (*region).sourceCount } as usize).min(K_UI_MAX_AUDIO_SOURCES);
-            let clip_count =
-                (unsafe { (*region).clipCount } as usize).min(K_UI_MAX_AUDIO_CLIPS);
+            let clip_count = (unsafe { (*region).clipCount } as usize).min(K_UI_MAX_AUDIO_CLIPS);
             let mut view = AudioSourcesView {
                 version: v0,
                 audio_map_bpm_milli: unsafe { (*region).audioMapBpmMilli },
@@ -1330,14 +1530,12 @@ impl EngineHandle {
     /// Sends a windowed waveform query. The engine answers it into
     /// `slots[requestSeq % K_UI_WAVEFORM_SLOTS]`; read it back with
     /// `read_waveform_slot`. Same ring as every other command.
-    pub fn send_waveform_request(
-        &self,
-        payload: UiWaveformRequestPayload,
-    ) -> Result<(), String> {
+    pub fn send_waveform_request(&self, payload: UiWaveformRequestPayload) -> Result<(), String> {
         self.write_entry(
             &payload as *const UiWaveformRequestPayload as *const u8,
             std::mem::size_of::<UiWaveformRequestPayload>(),
-        ).map(|_| ())
+        )
+        .map(|_| ())
     }
 
     /// Reads one waveform answer slot under its per-slot seqlock (seq odd while the
@@ -1348,11 +1546,13 @@ impl EngineHandle {
         if index >= K_UI_WAVEFORM_SLOTS {
             return None;
         }
-        let off = unsafe { (*self.header).ui_waveform_offset };
+        let off = self.layout.offset(UiRegionId::UiWaveform);
         if off == 0 {
             return None;
         }
-        let Some(region) = self.region::<UiWaveformRegion>(off) else { return None; };
+        let Some(region) = self.region::<UiWaveformRegion>(off) else {
+            return None;
+        };
         let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
         // The slot's `seq` is a plain u32 in the bindgen struct (SHM_BINDGEN maps the
         // C++ atomic to u32); read it through an AtomicU32 cast so the seqlock's
@@ -1395,11 +1595,13 @@ impl EngineHandle {
     /// read it, compare `version` to what you cached, and skip the redraw when it has not moved.
     /// Returns an empty view (version 0) when the engine predates the region.
     pub fn read_automation_lanes(&self) -> AutomationLanesView {
-        let off = unsafe { (*self.header).ui_automation_offset };
+        let off = self.layout.offset(UiRegionId::UiAutomation);
         if off == 0 {
             return AutomationLanesView::default();
         }
-        let Some(region) = self.region::<UiAutomationLaneRegion>(off) else { return AutomationLanesView::default(); };
+        let Some(region) = self.region::<UiAutomationLaneRegion>(off) else {
+            return AutomationLanesView::default();
+        };
         // Same discipline as the arrange summary, for the same reason: version 0 means a write is
         // IN FLIGHT. Sampling the version, reading the body, and sampling again is NOT torn-safe
         // by itself — the engine only moves the number after writing, so a reader that lands
@@ -1430,7 +1632,11 @@ impl EngineHandle {
             fence(Ordering::Acquire);
             let v1 = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*region).version)) };
             if v0 == v1 {
-                return AutomationLanesView { version: v0, truncated, lanes };
+                return AutomationLanesView {
+                    version: v0,
+                    truncated,
+                    lanes,
+                };
             }
         }
         AutomationLanesView::default()
@@ -1457,11 +1663,13 @@ impl EngineHandle {
         if index >= K_UI_AUTOMATION_SLOTS {
             return None;
         }
-        let off = unsafe { (*self.header).ui_automation_slot_offset };
+        let off = self.layout.offset(UiRegionId::UiAutomationSlot);
         if off == 0 {
             return None;
         }
-        let Some(region) = self.region::<UiAutomationSlotRegion>(off) else { return None; };
+        let Some(region) = self.region::<UiAutomationSlotRegion>(off) else {
+            return None;
+        };
         let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
         let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
         for _ in 0..4096 {
@@ -1497,11 +1705,13 @@ impl EngineHandle {
         if index >= crate::layout::K_UI_SAMPLER_ENVELOPE_SLOTS {
             return None;
         }
-        let off = unsafe { (*self.header).ui_sampler_envelope_offset };
+        let off = self.layout.offset(UiRegionId::UiSamplerEnvelope);
         if off == 0 {
             return None;
         }
-        let Some(region) = self.region::<crate::layout::UiSamplerEnvelopeRegion>(off) else { return None; };
+        let Some(region) = self.region::<crate::layout::UiSamplerEnvelopeRegion>(off) else {
+            return None;
+        };
         let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
         let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
         for _ in 0..4096 {
@@ -1581,26 +1791,22 @@ impl EngineHandle {
     /// 40 bytes, so the engine checks the size and then dispatches on
     /// commandType — the shape has to match the one that command reads, field
     /// for field, or the engine reads a config out of the wrong offsets.
-    pub fn send_patcher_config(
-        &self,
-        payload: UiPatcherNodeConfigPayload,
-    ) -> Result<(), String> {
+    pub fn send_patcher_config(&self, payload: UiPatcherNodeConfigPayload) -> Result<(), String> {
         self.write_entry(
             &payload as *const UiPatcherNodeConfigPayload as *const u8,
             std::mem::size_of::<UiPatcherNodeConfigPayload>(),
-        ).map(|_| ())
+        )
+        .map(|_| ())
     }
 
     /// Add, remove or connect patcher nodes. Same story as the config above:
     /// a distinct 40-byte shape the engine reads for these three command types.
-    pub fn send_patcher_graph(
-        &self,
-        payload: UiPatcherGraphCommandPayload,
-    ) -> Result<(), String> {
+    pub fn send_patcher_graph(&self, payload: UiPatcherGraphCommandPayload) -> Result<(), String> {
         self.write_entry(
             &payload as *const UiPatcherGraphCommandPayload as *const u8,
             std::mem::size_of::<UiPatcherGraphCommandPayload>(),
-        ).map(|_| ())
+        )
+        .map(|_| ())
     }
 
     /// v23: the first instrument's name per track (empty when the track has none).
@@ -1706,18 +1912,26 @@ impl EngineHandle {
         if slot >= crate::layout::K_UI_MAX_TRACKS {
             return out;
         }
-        let offset = unsafe { std::ptr::read_volatile(&(*self.header).ui_device_meter_offset) };
+        let offset = self.layout.offset(UiRegionId::UiDeviceMeter);
         if offset == 0 {
             return out;
         }
-        let Some(region_ptr) = self.region::<UiDeviceMeterRegion>(offset) else { return out; };
+        let Some(region_ptr) = self.region::<UiDeviceMeterRegion>(offset) else {
+            return out;
+        };
         let region = unsafe { &*region_ptr };
         for d in 0..K_UI_MAX_METERED_DEVICES {
             let m = region.meters[slot][d];
             if m.device_id == UI_METER_NO_DEVICE {
                 continue;
             }
-            out.push((m.device_id, m.in_peak_mb, m.out_peak_mb, m.in_rms_mb, m.out_rms_mb));
+            out.push((
+                m.device_id,
+                m.in_peak_mb,
+                m.out_peak_mb,
+                m.in_rms_mb,
+                m.out_rms_mb,
+            ));
         }
         out
     }
@@ -1794,7 +2008,9 @@ impl EngineHandle {
     /// Returns the number drained. An empty ring is the normal case and costs
     /// two atomic loads.
     pub fn drain_ui_out(&self, out: &mut Vec<EventEntry>, max: usize) -> usize {
-        let Some(ring) = self.ring_ui_out.as_ref() else { return 0 };
+        let Some(ring) = self.ring_ui_out.as_ref() else {
+            return 0;
+        };
         let mut read = unsafe { (*ring.header).read_index.load(Ordering::Relaxed) };
         let write = unsafe { (*ring.header).write_index.load(Ordering::Acquire) };
         let mut n = 0;
@@ -1890,19 +2106,18 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerSetSlotPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerSetSlotPayload>(),
-        ).map(|_| ())
+        )
+        .map(|_| ())
     }
 
     /// Write a note's row ops. The MASK in the payload says which of them this command is
     /// speaking about; a bit clear leaves that op untouched.
-    pub fn send_row_ops(
-        &self,
-        payload: crate::layout::UiSetRowOpsPayload,
-    ) -> Result<(), String> {
+    pub fn send_row_ops(&self, payload: crate::layout::UiSetRowOpsPayload) -> Result<(), String> {
         self.write_entry(
             &payload as *const crate::layout::UiSetRowOpsPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSetRowOpsPayload>(),
-        ).map(|_| ())
+        )
+        .map(|_| ())
     }
 
     pub fn send_sampler_set_device(
@@ -1933,11 +2148,13 @@ impl EngineHandle {
     /// does not publish one (the counter starts at 1), which is distinguishable from an
     /// unchanged kit precisely because it never appears after a change.
     pub fn sampler_kit_version(&self) -> u32 {
-        let off = unsafe { (*self.header).ui_sampler_kit_offset };
+        let off = self.layout.offset(UiRegionId::UiSamplerKit);
         if off == 0 {
             return 0;
         }
-        let Some(region) = self.region::<crate::layout::UiSamplerKitRegion>(off) else { return 0; };
+        let Some(region) = self.region::<crate::layout::UiSamplerKitRegion>(off) else {
+            return 0;
+        };
         let ptr = unsafe { std::ptr::addr_of!((*region).version) } as *const AtomicU32;
         unsafe { (*ptr).load(Ordering::Acquire) }
     }
@@ -1946,11 +2163,13 @@ impl EngineHandle {
         if index >= crate::layout::UI_SAMPLER_KIT_SLOTS {
             return None;
         }
-        let off = unsafe { (*self.header).ui_sampler_kit_offset };
+        let off = self.layout.offset(UiRegionId::UiSamplerKit);
         if off == 0 {
             return None;
         }
-        let Some(region) = self.region::<crate::layout::UiSamplerKitRegion>(off) else { return None; };
+        let Some(region) = self.region::<crate::layout::UiSamplerKitRegion>(off) else {
+            return None;
+        };
         let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
         let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
         for _ in 0..4096 {
@@ -2528,12 +2747,10 @@ impl EngineHandle {
                 return Err("UI command ring is full (engine not draining)".to_string());
             }
             match unsafe {
-                (*ring.header).write_index.compare_exchange_weak(
-                    write,
-                    next,
-                    Ordering::AcqRel,
-                    Ordering::Relaxed,
-                ).map(|_| ())
+                (*ring.header)
+                    .write_index
+                    .compare_exchange_weak(write, next, Ordering::AcqRel, Ordering::Relaxed)
+                    .map(|_| ())
             } {
                 Ok(_) => break next,
                 Err(actual) => write = actual,
@@ -2818,6 +3035,7 @@ mod command_outcome_tests {
             EngineHandle {
                 _mmap: Mapping::ReadOnly(readonly),
                 header,
+                layout: ValidatedUiShmLayout::empty_fixture(),
                 size,
                 ring_ui: None,
                 ring_ui_out: None,
@@ -3072,6 +3290,441 @@ mod command_outcome_tests {
     }
 }
 
+fn checked_align_up(value: usize, alignment: usize) -> Option<usize> {
+    if alignment == 0 || !alignment.is_power_of_two() {
+        return None;
+    }
+    value
+        .checked_add(alignment - 1)
+        .map(|sum| sum & !(alignment - 1))
+}
+
+fn checked_product3(a: u32, b: u32, c: u32, name: &str) -> Result<usize, String> {
+    (a as usize)
+        .checked_mul(b as usize)
+        .and_then(|value| value.checked_mul(c as usize))
+        .ok_or_else(|| format!("{name} size arithmetic overflow"))
+}
+
+fn exact_declared_size(name: &str, declared: u64, expected: usize) -> Result<usize, String> {
+    if declared != expected as u64 {
+        return Err(format!(
+            "{name} declares {declared} bytes, expected exactly {expected}"
+        ));
+    }
+    Ok(expected)
+}
+
+fn validated_region_span(
+    name: &'static str,
+    offset: u64,
+    size: usize,
+    mapped: usize,
+) -> Result<(usize, usize), String> {
+    let start = usize::try_from(offset).map_err(|_| format!("{name} offset does not fit usize"))?;
+    if start == 0 {
+        return Err(format!("{name} offset is zero"));
+    }
+    if start % UI_SHM_LAYOUT_ALIGNMENT != 0 {
+        return Err(format!(
+            "{name} offset {start} is not {UI_SHM_LAYOUT_ALIGNMENT}-byte aligned"
+        ));
+    }
+    let end = start
+        .checked_add(size)
+        .ok_or_else(|| format!("{name} end arithmetic overflow"))?;
+    if end > mapped {
+        return Err(format!(
+            "{name} span [{start}, {end}) exceeds {mapped}-byte mapping"
+        ));
+    }
+    Ok((start, end))
+}
+
+fn validate_ring_layout(
+    base: *mut u8,
+    offset: u64,
+    mapped: usize,
+    kind: RingKind,
+    name: &'static str,
+) -> Result<RingLayout, String> {
+    let header_bytes = checked_align_up(std::mem::size_of::<RingHeader>(), UI_SHM_LAYOUT_ALIGNMENT)
+        .ok_or_else(|| format!("{name} header-size arithmetic overflow"))?;
+    let (start, _) = validated_region_span(name, offset, header_bytes, mapped)?;
+    let header = unsafe { base.add(start) as *const RingHeader };
+    let capacity = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*header).capacity)) };
+    let entry_size =
+        unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*header).entry_size)) } as usize;
+
+    match kind {
+        RingKind::Inactive => {
+            if capacity != 0 || entry_size != 0 {
+                return Err(format!(
+                    "{name} inactive ring has capacity {capacity} and entry size {entry_size}"
+                ));
+            }
+        }
+        RingKind::Event => {
+            if capacity == 0 || !capacity.is_power_of_two() {
+                return Err(format!(
+                    "{name} event-ring capacity {capacity} is not a non-zero power of two"
+                ));
+            }
+            if entry_size != std::mem::size_of::<EventEntry>() {
+                return Err(format!(
+                    "{name} entry size {entry_size}, expected {}",
+                    std::mem::size_of::<EventEntry>()
+                ));
+            }
+        }
+        RingKind::Edit => {
+            if capacity as usize != K_UI_EDIT_BATCH_CAPACITY {
+                return Err(format!(
+                    "{name} capacity {capacity}, expected {K_UI_EDIT_BATCH_CAPACITY}"
+                ));
+            }
+            if entry_size != std::mem::size_of::<UiEditBatchEntry>() {
+                return Err(format!(
+                    "{name} entry size {entry_size}, expected {}",
+                    std::mem::size_of::<UiEditBatchEntry>()
+                ));
+            }
+        }
+    }
+
+    let entries_bytes = (capacity as usize)
+        .checked_mul(entry_size)
+        .ok_or_else(|| format!("{name} entries-size arithmetic overflow"))?;
+    let entries_bytes = checked_align_up(entries_bytes, UI_SHM_LAYOUT_ALIGNMENT)
+        .ok_or_else(|| format!("{name} entries alignment overflow"))?;
+    let bytes = header_bytes
+        .checked_add(entries_bytes)
+        .ok_or_else(|| format!("{name} total-size arithmetic overflow"))?;
+    validated_region_span(name, offset, bytes, mapped)?;
+    Ok(RingLayout {
+        offset: start,
+        entries_offset: header_bytes,
+        capacity,
+        entry_size,
+        bytes,
+    })
+}
+
+fn validate_ui_shm_layout(
+    base: *mut u8,
+    descriptor: UiShmDescriptor,
+    mapped: usize,
+) -> Result<ValidatedUiShmAttach, String> {
+    if base as usize % UI_SHM_LAYOUT_ALIGNMENT != 0 {
+        return Err(format!(
+            "mapping base is not {UI_SHM_LAYOUT_ALIGNMENT}-byte aligned"
+        ));
+    }
+    if mapped < std::mem::size_of::<ShmHeader>() {
+        return Err("mapping does not contain ShmHeader".to_string());
+    }
+
+    let mut layout = ValidatedUiShmLayout {
+        offsets: [0; UI_SHM_REGION_COUNT],
+        sizes: [0; UI_SHM_REGION_COUNT],
+    };
+    let mut spans = Vec::with_capacity(UI_SHM_REGION_COUNT + 1);
+    spans.push(RegionSpan {
+        name: "mapping_header",
+        start: 0,
+        end: std::mem::size_of::<ShmHeader>(),
+    });
+
+    macro_rules! cache_ui_shm_region {
+        ($id:ident, $name:literal, $offset:expr, $size:expr) => {{
+            let size = $size;
+            let (start, end) = validated_region_span($name, $offset, size, mapped)?;
+            layout.offsets[UiRegionId::$id as usize] = start;
+            layout.sizes[UiRegionId::$id as usize] = size;
+            spans.push(RegionSpan {
+                name: $name,
+                start,
+                end,
+            });
+        }};
+    }
+
+    let audio_in_bytes = checked_product3(
+        descriptor.num_channels_in,
+        descriptor.num_blocks,
+        descriptor.channel_stride_bytes,
+        "audio_in",
+    )?;
+    cache_ui_shm_region!(
+        AudioIn,
+        "audio_in",
+        descriptor.audio_in_offset,
+        audio_in_bytes
+    );
+    let audio_out_bytes = checked_product3(
+        descriptor.num_channels_out,
+        descriptor.num_blocks,
+        descriptor.channel_stride_bytes,
+        "audio_out",
+    )?;
+    cache_ui_shm_region!(
+        AudioOut,
+        "audio_out",
+        descriptor.audio_out_offset,
+        audio_out_bytes
+    );
+
+    let ring_std = validate_ring_layout(
+        base,
+        descriptor.ring_std_offset,
+        mapped,
+        RingKind::Inactive,
+        "ring_std",
+    )?;
+    cache_ui_shm_region!(
+        RingStd,
+        "ring_std",
+        descriptor.ring_std_offset,
+        ring_std.bytes
+    );
+    let ring_ctrl = validate_ring_layout(
+        base,
+        descriptor.ring_ctrl_offset,
+        mapped,
+        RingKind::Inactive,
+        "ring_ctrl",
+    )?;
+    cache_ui_shm_region!(
+        RingCtrl,
+        "ring_ctrl",
+        descriptor.ring_ctrl_offset,
+        ring_ctrl.bytes
+    );
+    let ring_ui = validate_ring_layout(
+        base,
+        descriptor.ring_ui_offset,
+        mapped,
+        RingKind::Event,
+        "ring_ui",
+    )?;
+    cache_ui_shm_region!(RingUi, "ring_ui", descriptor.ring_ui_offset, ring_ui.bytes);
+    let ring_ui_out = validate_ring_layout(
+        base,
+        descriptor.ring_ui_out_offset,
+        mapped,
+        RingKind::Event,
+        "ring_ui_out",
+    )?;
+    cache_ui_shm_region!(
+        RingUiOut,
+        "ring_ui_out",
+        descriptor.ring_ui_out_offset,
+        ring_ui_out.bytes
+    );
+    let ring_ui_edit = validate_ring_layout(
+        base,
+        descriptor.ring_ui_edit_offset,
+        mapped,
+        RingKind::Edit,
+        "ring_ui_edit",
+    )?;
+    cache_ui_shm_region!(
+        RingUiEdit,
+        "ring_ui_edit",
+        descriptor.ring_ui_edit_offset,
+        ring_ui_edit.bytes
+    );
+    cache_ui_shm_region!(
+        Mailbox,
+        "mailbox",
+        descriptor.mailbox_offset,
+        std::mem::size_of::<BlockMailbox>()
+    );
+    cache_ui_shm_region!(
+        UiClip,
+        "ui_clip",
+        descriptor.ui_clip_offset,
+        exact_declared_size(
+            "ui_clip",
+            descriptor.ui_clip_bytes,
+            std::mem::size_of::<UiClipWindowSnapshot>(),
+        )?
+    );
+    cache_ui_shm_region!(
+        UiHarmony,
+        "ui_harmony",
+        descriptor.ui_harmony_offset,
+        exact_declared_size(
+            "ui_harmony",
+            descriptor.ui_harmony_bytes,
+            std::mem::size_of::<UiHarmonySnapshot>(),
+        )?
+    );
+    let clip_all_bytes = K_UI_MAX_TRACKS
+        .checked_mul(std::mem::size_of::<UiClipWindowSnapshot>())
+        .ok_or_else(|| "ui_clip_all size arithmetic overflow".to_string())?;
+    cache_ui_shm_region!(
+        UiClipAll,
+        "ui_clip_all",
+        descriptor.ui_clip_all_offset,
+        exact_declared_size("ui_clip_all", descriptor.ui_clip_all_bytes, clip_all_bytes)?
+    );
+    let ring_ui_agent = validate_ring_layout(
+        base,
+        descriptor.ring_ui_agent_offset,
+        mapped,
+        RingKind::Event,
+        "ring_ui_agent",
+    )?;
+    cache_ui_shm_region!(
+        RingUiAgent,
+        "ring_ui_agent",
+        descriptor.ring_ui_agent_offset,
+        ring_ui_agent.bytes
+    );
+    cache_ui_shm_region!(
+        UiClipExtent,
+        "ui_clip_extent",
+        descriptor.ui_clip_extent_offset,
+        std::mem::size_of::<UiClipExtentRegion>()
+    );
+    cache_ui_shm_region!(
+        UiPatcher,
+        "ui_patcher",
+        descriptor.ui_patcher_offset,
+        std::mem::size_of::<UiPatcherRegion>()
+    );
+    cache_ui_shm_region!(
+        UiArrange,
+        "ui_arrange",
+        descriptor.ui_arrange_offset,
+        exact_declared_size(
+            "ui_arrange",
+            descriptor.ui_arrange_bytes,
+            std::mem::size_of::<crate::layout::UiArrangeSummaryRegion>(),
+        )?
+    );
+    cache_ui_shm_region!(
+        UiAutomation,
+        "ui_automation",
+        descriptor.ui_automation_offset,
+        exact_declared_size(
+            "ui_automation",
+            descriptor.ui_automation_bytes,
+            std::mem::size_of::<UiAutomationLaneRegion>(),
+        )?
+    );
+    cache_ui_shm_region!(
+        UiAutomationSlot,
+        "ui_automation_slot",
+        descriptor.ui_automation_slot_offset,
+        exact_declared_size(
+            "ui_automation_slot",
+            descriptor.ui_automation_slot_bytes,
+            std::mem::size_of::<UiAutomationSlotRegion>(),
+        )?
+    );
+    cache_ui_shm_region!(
+        UiDeviceMeter,
+        "ui_device_meter",
+        descriptor.ui_device_meter_offset,
+        std::mem::size_of::<crate::layout::UiDeviceMeterRegion>()
+    );
+    cache_ui_shm_region!(
+        UiScales,
+        "ui_scales",
+        descriptor.ui_scales_offset,
+        std::mem::size_of::<UiScaleRegion>()
+    );
+    cache_ui_shm_region!(
+        UiDeviceParams,
+        "ui_device_params",
+        descriptor.ui_device_params_offset,
+        std::mem::size_of::<UiDeviceParamsRegion>()
+    );
+    cache_ui_shm_region!(
+        UiAudioSource,
+        "ui_audio_source",
+        descriptor.ui_audio_source_offset,
+        std::mem::size_of::<UiAudioSourceRegion>()
+    );
+    cache_ui_shm_region!(
+        UiWaveform,
+        "ui_waveform",
+        descriptor.ui_waveform_offset,
+        std::mem::size_of::<UiWaveformRegion>()
+    );
+    cache_ui_shm_region!(
+        UiSamplerKit,
+        "ui_sampler_kit",
+        descriptor.ui_sampler_kit_offset,
+        exact_declared_size(
+            "ui_sampler_kit",
+            descriptor.ui_sampler_kit_bytes,
+            std::mem::size_of::<crate::layout::UiSamplerKitRegion>(),
+        )?
+    );
+    cache_ui_shm_region!(
+        UiSamplerEnvelope,
+        "ui_sampler_envelope",
+        descriptor.ui_sampler_envelope_offset,
+        exact_declared_size(
+            "ui_sampler_envelope",
+            descriptor.ui_sampler_envelope_bytes,
+            std::mem::size_of::<crate::layout::UiSamplerEnvelopeRegion>(),
+        )?
+    );
+    cache_ui_shm_region!(
+        UiCommandOutcome,
+        "ui_command_outcome",
+        descriptor.ui_command_outcome_offset,
+        exact_declared_size(
+            "ui_command_outcome",
+            descriptor.ui_command_outcome_bytes,
+            std::mem::size_of::<UiCommandOutcomeRegion>(),
+        )?
+    );
+
+    let outcome = unsafe {
+        base.add(layout.offsets[UiRegionId::UiCommandOutcome as usize])
+            as *const UiCommandOutcomeRegion
+    };
+    let outcome_capacity =
+        unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*outcome).capacity)) };
+    if outcome_capacity as usize != K_UI_COMMAND_OUTCOME_CAPACITY {
+        return Err(format!(
+            "ui_command_outcome capacity {outcome_capacity}, expected {K_UI_COMMAND_OUTCOME_CAPACITY}"
+        ));
+    }
+
+    spans.retain(|span| span.start != span.end);
+    spans.sort_unstable_by_key(|span| (span.start, span.end));
+    let mut previous = spans[0];
+    for current in spans.into_iter().skip(1) {
+        if current.start < previous.end {
+            return Err(format!(
+                "{} span [{}, {}) overlaps {} span [{}, {})",
+                current.name,
+                current.start,
+                current.end,
+                previous.name,
+                previous.start,
+                previous.end,
+            ));
+        }
+        if current.end > previous.end {
+            previous = current;
+        }
+    }
+
+    Ok(ValidatedUiShmAttach {
+        layout,
+        ring_ui,
+        ring_ui_out,
+        ring_ui_agent,
+    })
+}
+
 /// Does a `size`-byte region of alignment `align` fit at `offset` in a mapping of `mapped` bytes?
 ///
 /// AE-P1.3, and free rather than a method for one reason: as a method on EngineHandle it could only
@@ -3117,54 +3770,11 @@ fn region_fits(offset: usize, size: usize, align: usize, mapped: usize) -> bool 
 ///      wrap the sum back into range.
 ///
 /// `len` is the mapped length, which the caller already knows from the file's metadata.
+#[cfg(test)]
 fn ring_view(base: *mut u8, offset: u64, len: usize) -> Option<RingView> {
-    if offset == 0 {
-        return None;
-    }
-    let offset = usize::try_from(offset).ok()?;
-    // THE ALIGNMENT CHECK IS ON THE OFFSET, SO IT ONLY WORKS IF THE BASE IS ALIGNED — entries land
-    // at `base + offset + 64`, so `entries % 64 == base % 64`. In production `base` comes from mmap
-    // and is page-aligned, which is why this holds; it is a precondition of the function and not
-    // something the offset test establishes. Stated as an assertion rather than a comment because
-    // the first test harness written for this function allocated `vec![0u8; n]`, which measured 32
-    // mod 64, and therefore validated nothing while appearing to.
-    debug_assert_eq!(
-        base as usize % std::mem::align_of::<RingHeader>(),
-        0,
-        "ring_view assumes a mapping-aligned base; entries inherit the base's alignment"
-    );
-    if offset % std::mem::align_of::<RingHeader>() != 0 {
-        return None;
-    }
-    // (2) The header must fit BEFORE it is read. `checked_add` because offset is attacker-shaped.
-    if offset.checked_add(std::mem::size_of::<RingHeader>())? > len {
-        return None;
-    }
-    let header = unsafe { base.add(offset) as *mut RingHeader };
-    let capacity = unsafe { (*header).capacity };
-    if capacity == 0 || (capacity & (capacity - 1)) != 0 {
-        return None;
-    }
-    let entry_size = unsafe { (*header).entry_size } as usize;
-    if entry_size != std::mem::size_of::<EventEntry>() {
-        return None;
-    }
-    let entries_offset = (std::mem::size_of::<RingHeader>() + 63) & !63;
-    // (4) ...and so must every entry the mask can reach. capacity is a u32 power of two, so the
-    // product is computed in usize with checked arithmetic rather than trusted to be small.
-    let entries_bytes = (capacity as usize).checked_mul(entry_size)?;
-    let end = offset
-        .checked_add(entries_offset)?
-        .checked_add(entries_bytes)?;
-    if end > len {
-        return None;
-    }
-    let entries = header as *mut u8;
-    Some(RingView {
-        header,
-        entries: unsafe { entries.add(entries_offset) as *mut EventEntry },
-        mask: capacity - 1,
-    })
+    validate_ring_layout(base, offset, len, RingKind::Event, "event_ring")
+        .ok()
+        .map(|layout| layout.event_view(base))
 }
 
 #[cfg(test)]
@@ -3329,6 +3939,348 @@ mod ring_view_bounds_tests {
         let hdr = unsafe { buf.ptr.add(64) as *mut RingHeader };
         unsafe { (*hdr).entry_size = (ENTRY as u32) + 1 };
         assert!(!view(&buf, 64, len));
+    }
+}
+
+#[cfg(test)]
+mod layout_non_overlap_tests {
+    use super::*;
+
+    struct AlignedMapping {
+        ptr: *mut u8,
+        layout: std::alloc::Layout,
+        len: usize,
+    }
+
+    impl AlignedMapping {
+        fn new(len: usize) -> Self {
+            let layout = std::alloc::Layout::from_size_align(len.max(1), UI_SHM_LAYOUT_ALIGNMENT)
+                .expect("fixture allocation layout");
+            let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+            assert!(!ptr.is_null());
+            assert_eq!(ptr as usize % UI_SHM_LAYOUT_ALIGNMENT, 0);
+            Self { ptr, layout, len }
+        }
+    }
+
+    impl Drop for AlignedMapping {
+        fn drop(&mut self) {
+            unsafe { std::alloc::dealloc(self.ptr, self.layout) };
+        }
+    }
+
+    fn align64(value: usize) -> usize {
+        checked_align_up(value, UI_SHM_LAYOUT_ALIGNMENT).expect("fixture alignment")
+    }
+
+    fn ring_bytes(capacity: usize, entry_size: usize) -> usize {
+        align64(std::mem::size_of::<RingHeader>()) + align64(capacity * entry_size)
+    }
+
+    fn place(cursor: &mut usize, bytes: usize) -> u64 {
+        let offset = *cursor;
+        *cursor += align64(bytes);
+        offset as u64
+    }
+
+    unsafe fn write_ring(mapping: &AlignedMapping, offset: u64, capacity: u32, entry_size: usize) {
+        let header = unsafe { mapping.ptr.add(offset as usize) as *mut RingHeader };
+        unsafe {
+            (*header).capacity = capacity;
+            (*header).entry_size = entry_size as u32;
+        }
+    }
+
+    fn correct_fixture() -> (AlignedMapping, UiShmDescriptor) {
+        let mut descriptor = UiShmDescriptor::default();
+        let mut cursor = align64(std::mem::size_of::<ShmHeader>());
+
+        descriptor.audio_in_offset = cursor as u64;
+        descriptor.audio_out_offset = cursor as u64;
+        descriptor.ring_std_offset = place(&mut cursor, ring_bytes(0, 0));
+        descriptor.ring_ctrl_offset = place(&mut cursor, ring_bytes(0, 0));
+        descriptor.ring_ui_offset = place(
+            &mut cursor,
+            ring_bytes(4, std::mem::size_of::<EventEntry>()),
+        );
+        descriptor.ring_ui_out_offset = place(
+            &mut cursor,
+            ring_bytes(4, std::mem::size_of::<EventEntry>()),
+        );
+        descriptor.ring_ui_edit_offset = place(
+            &mut cursor,
+            ring_bytes(
+                K_UI_EDIT_BATCH_CAPACITY,
+                std::mem::size_of::<UiEditBatchEntry>(),
+            ),
+        );
+        descriptor.mailbox_offset = place(&mut cursor, std::mem::size_of::<BlockMailbox>());
+        descriptor.ui_clip_bytes = std::mem::size_of::<UiClipWindowSnapshot>() as u64;
+        descriptor.ui_clip_offset = place(&mut cursor, descriptor.ui_clip_bytes as usize);
+        descriptor.ui_harmony_bytes = std::mem::size_of::<UiHarmonySnapshot>() as u64;
+        descriptor.ui_harmony_offset = place(&mut cursor, descriptor.ui_harmony_bytes as usize);
+        descriptor.ui_clip_all_bytes =
+            (K_UI_MAX_TRACKS * std::mem::size_of::<UiClipWindowSnapshot>()) as u64;
+        descriptor.ui_clip_all_offset = place(&mut cursor, descriptor.ui_clip_all_bytes as usize);
+        descriptor.ring_ui_agent_offset = place(
+            &mut cursor,
+            ring_bytes(4, std::mem::size_of::<EventEntry>()),
+        );
+        descriptor.ui_clip_extent_offset =
+            place(&mut cursor, std::mem::size_of::<UiClipExtentRegion>());
+        descriptor.ui_patcher_offset = place(&mut cursor, std::mem::size_of::<UiPatcherRegion>());
+        descriptor.ui_arrange_bytes =
+            std::mem::size_of::<crate::layout::UiArrangeSummaryRegion>() as u64;
+        descriptor.ui_arrange_offset = place(&mut cursor, descriptor.ui_arrange_bytes as usize);
+        descriptor.ui_automation_bytes = std::mem::size_of::<UiAutomationLaneRegion>() as u64;
+        descriptor.ui_automation_offset =
+            place(&mut cursor, descriptor.ui_automation_bytes as usize);
+        descriptor.ui_automation_slot_bytes = std::mem::size_of::<UiAutomationSlotRegion>() as u64;
+        descriptor.ui_automation_slot_offset =
+            place(&mut cursor, descriptor.ui_automation_slot_bytes as usize);
+        descriptor.ui_device_meter_offset = place(
+            &mut cursor,
+            std::mem::size_of::<crate::layout::UiDeviceMeterRegion>(),
+        );
+        descriptor.ui_scales_offset = place(&mut cursor, std::mem::size_of::<UiScaleRegion>());
+        descriptor.ui_device_params_offset =
+            place(&mut cursor, std::mem::size_of::<UiDeviceParamsRegion>());
+        descriptor.ui_audio_source_offset =
+            place(&mut cursor, std::mem::size_of::<UiAudioSourceRegion>());
+        descriptor.ui_waveform_offset = place(&mut cursor, std::mem::size_of::<UiWaveformRegion>());
+        descriptor.ui_sampler_kit_bytes =
+            std::mem::size_of::<crate::layout::UiSamplerKitRegion>() as u64;
+        descriptor.ui_sampler_kit_offset =
+            place(&mut cursor, descriptor.ui_sampler_kit_bytes as usize);
+        descriptor.ui_sampler_envelope_bytes =
+            std::mem::size_of::<crate::layout::UiSamplerEnvelopeRegion>() as u64;
+        descriptor.ui_sampler_envelope_offset =
+            place(&mut cursor, descriptor.ui_sampler_envelope_bytes as usize);
+        descriptor.ui_command_outcome_bytes = std::mem::size_of::<UiCommandOutcomeRegion>() as u64;
+        descriptor.ui_command_outcome_offset =
+            place(&mut cursor, descriptor.ui_command_outcome_bytes as usize);
+
+        let mapping = AlignedMapping::new(align64(cursor));
+        unsafe {
+            write_ring(&mapping, descriptor.ring_std_offset, 0, 0);
+            write_ring(&mapping, descriptor.ring_ctrl_offset, 0, 0);
+            write_ring(
+                &mapping,
+                descriptor.ring_ui_offset,
+                4,
+                std::mem::size_of::<EventEntry>(),
+            );
+            write_ring(
+                &mapping,
+                descriptor.ring_ui_out_offset,
+                4,
+                std::mem::size_of::<EventEntry>(),
+            );
+            write_ring(
+                &mapping,
+                descriptor.ring_ui_edit_offset,
+                K_UI_EDIT_BATCH_CAPACITY as u32,
+                std::mem::size_of::<UiEditBatchEntry>(),
+            );
+            write_ring(
+                &mapping,
+                descriptor.ring_ui_agent_offset,
+                4,
+                std::mem::size_of::<EventEntry>(),
+            );
+            let outcomes = mapping
+                .ptr
+                .add(descriptor.ui_command_outcome_offset as usize)
+                as *mut UiCommandOutcomeRegion;
+            (*outcomes).capacity = K_UI_COMMAND_OUTCOME_CAPACITY as u32;
+        }
+        (mapping, descriptor)
+    }
+
+    fn validate(
+        mapping: &AlignedMapping,
+        descriptor: UiShmDescriptor,
+    ) -> Result<ValidatedUiShmAttach, String> {
+        validate_ui_shm_layout(mapping.ptr, descriptor, mapping.len)
+    }
+
+    #[test]
+    fn correct_v41_layout_accepts_zero_length_audio_aliases_and_adjacency() {
+        let (mapping, descriptor) = correct_fixture();
+        assert_eq!(descriptor.audio_in_offset, descriptor.ring_std_offset);
+        assert_eq!(descriptor.audio_out_offset, descriptor.ring_std_offset);
+        let validated = validate(&mapping, descriptor).expect("correct v41 layout");
+        assert_eq!(
+            validated.layout.offset(UiRegionId::UiCommandOutcome),
+            descriptor.ui_command_outcome_offset
+        );
+        assert_eq!(
+            validated.layout.size(UiRegionId::UiClip),
+            std::mem::size_of::<UiClipWindowSnapshot>()
+        );
+    }
+
+    #[test]
+    fn zero_misaligned_header_and_aligned_out_of_bounds_offsets_are_refused() {
+        let (mapping, descriptor) = correct_fixture();
+        let mut changed = descriptor;
+        changed.ui_waveform_offset = 0;
+        assert!(validate(&mapping, changed)
+            .unwrap_err()
+            .contains("offset is zero"));
+
+        changed = descriptor;
+        changed.ui_waveform_offset += 8;
+        assert!(validate(&mapping, changed)
+            .unwrap_err()
+            .contains("64-byte aligned"));
+
+        changed = descriptor;
+        changed.ui_waveform_offset = 64;
+        assert!(validate(&mapping, changed)
+            .unwrap_err()
+            .contains("mapping_header"));
+
+        changed = descriptor;
+        changed.ui_waveform_offset = mapping.len as u64;
+        assert!(validate(&mapping, changed).unwrap_err().contains("exceeds"));
+    }
+
+    #[test]
+    fn non_empty_fixed_and_ring_aliases_are_refused() {
+        let (mapping, descriptor) = correct_fixture();
+        let mut changed = descriptor;
+        changed.ui_waveform_offset = descriptor.ui_audio_source_offset;
+        assert!(validate(&mapping, changed)
+            .unwrap_err()
+            .contains("overlaps"));
+
+        changed = descriptor;
+        changed.ui_clip_extent_offset = descriptor.ring_ui_offset;
+        assert!(validate(&mapping, changed)
+            .unwrap_err()
+            .contains("overlaps"));
+    }
+
+    #[test]
+    fn an_audio_alias_is_refused_as_soon_as_the_plane_is_non_empty() {
+        let (mapping, mut descriptor) = correct_fixture();
+        descriptor.num_channels_in = 1;
+        descriptor.num_blocks = 1;
+        descriptor.channel_stride_bytes = 64;
+        assert!(validate(&mapping, descriptor)
+            .unwrap_err()
+            .contains("overlaps"));
+    }
+
+    #[test]
+    fn audio_size_arithmetic_cannot_wrap() {
+        let (mapping, mut descriptor) = correct_fixture();
+        descriptor.num_channels_in = u32::MAX;
+        descriptor.num_blocks = u32::MAX;
+        descriptor.channel_stride_bytes = u32::MAX;
+        assert!(validate(&mapping, descriptor)
+            .unwrap_err()
+            .contains("arithmetic overflow"));
+    }
+
+    #[test]
+    fn every_declared_exact_byte_companion_is_enforced() {
+        let (mapping, descriptor) = correct_fixture();
+        let mutations: [fn(&mut UiShmDescriptor); 9] = [
+            |d| d.ui_clip_bytes += 64,
+            |d| d.ui_harmony_bytes += 64,
+            |d| d.ui_clip_all_bytes += 64,
+            |d| d.ui_arrange_bytes += 64,
+            |d| d.ui_automation_bytes += 64,
+            |d| d.ui_automation_slot_bytes += 64,
+            |d| d.ui_sampler_kit_bytes += 64,
+            |d| d.ui_sampler_envelope_bytes += 64,
+            |d| d.ui_command_outcome_bytes += 64,
+        ];
+        for mutate in mutations {
+            let mut changed = descriptor;
+            mutate(&mut changed);
+            assert!(validate(&mapping, changed)
+                .unwrap_err()
+                .contains("expected exactly"));
+        }
+    }
+
+    #[test]
+    fn inactive_event_and_edit_ring_shapes_are_distinct_and_fail_closed() {
+        let (mapping, descriptor) = correct_fixture();
+        unsafe {
+            write_ring(
+                &mapping,
+                descriptor.ring_std_offset,
+                2,
+                std::mem::size_of::<EventEntry>(),
+            );
+        }
+        assert!(validate(&mapping, descriptor)
+            .unwrap_err()
+            .contains("inactive ring"));
+        unsafe { write_ring(&mapping, descriptor.ring_std_offset, 0, 0) };
+
+        for (capacity, entry_size) in [
+            (0, std::mem::size_of::<EventEntry>()),
+            (3, std::mem::size_of::<EventEntry>()),
+            (4, std::mem::size_of::<EventEntry>() + 1),
+        ] {
+            unsafe { write_ring(&mapping, descriptor.ring_ui_offset, capacity, entry_size) };
+            assert!(validate(&mapping, descriptor).is_err());
+        }
+        unsafe {
+            write_ring(
+                &mapping,
+                descriptor.ring_ui_offset,
+                4,
+                std::mem::size_of::<EventEntry>(),
+            );
+            write_ring(
+                &mapping,
+                descriptor.ring_ui_edit_offset,
+                (K_UI_EDIT_BATCH_CAPACITY / 2) as u32,
+                std::mem::size_of::<UiEditBatchEntry>(),
+            );
+        }
+        assert!(validate(&mapping, descriptor)
+            .unwrap_err()
+            .contains("expected 64"));
+        unsafe {
+            write_ring(
+                &mapping,
+                descriptor.ring_ui_edit_offset,
+                K_UI_EDIT_BATCH_CAPACITY as u32,
+                std::mem::size_of::<UiEditBatchEntry>() + 64,
+            );
+        }
+        assert!(validate(&mapping, descriptor)
+            .unwrap_err()
+            .contains("entry size"));
+    }
+
+    #[test]
+    fn a_truncated_ring_header_is_refused_before_its_fields_are_read() {
+        let (mapping, mut descriptor) = correct_fixture();
+        descriptor.ring_ui_offset = (mapping.len - UI_SHM_LAYOUT_ALIGNMENT) as u64;
+        let truncated_len = mapping.len - (UI_SHM_LAYOUT_ALIGNMENT / 2);
+        let error = validate_ui_shm_layout(mapping.ptr, descriptor, truncated_len).unwrap_err();
+        assert!(error.contains("exceeds"));
+    }
+
+    #[test]
+    fn validated_geometry_does_not_follow_a_later_header_mutation() {
+        let (mapping, descriptor) = correct_fixture();
+        let validated = validate(&mapping, descriptor).expect("correct layout");
+        let original = validated.layout.offset(UiRegionId::UiWaveform);
+        let header = mapping.ptr as *mut ShmHeader;
+        unsafe { (*header).ui_waveform_offset = descriptor.ui_audio_source_offset };
+        assert_eq!(validated.layout.offset(UiRegionId::UiWaveform), original);
+        assert_ne!(validated.layout.offset(UiRegionId::UiWaveform), unsafe {
+            (*header).ui_waveform_offset
+        });
     }
 }
 

@@ -917,6 +917,13 @@ add_test(NAME shm_access
 )
 set_tests_properties(shm_access PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
 
+# AE-P1.3's whole-layout residue: one derived 25-member population across the producer, Rust
+# header mirror, and validator table; a 26th reserved header span; cached geometry after attach.
+add_test(NAME ui_shm_layout
+  COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/ui_shm_layout_check.py
+)
+set_tests_properties(ui_shm_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+
 # AE-P0.2's generated schema bundle and its C++/Rust/TS emissions. Six test files validated them,
 # all six passed, and until this entry existed nothing executed any of them: `ae_p0_2` appeared
 # nowhere in this file, and the Rust one had no Cargo.toml above it, so `cargo test` could not have

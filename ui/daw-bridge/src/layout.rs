@@ -2601,6 +2601,8 @@ mod tests {
         const_assert_eq!(size_of::<UiDeviceMeter>(), 12);
         const_assert_eq!(size_of::<UiDeviceMeterRegion>(), 12352);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
+        assert_eq!(offset_of!(ShmHeader, audio_in_offset), 40);
+        assert_eq!(offset_of!(ShmHeader, audio_out_offset), 48);
         assert_eq!(offset_of!(ShmHeader, ring_std_offset), 56);
         assert_eq!(offset_of!(ShmHeader, ring_ctrl_offset), 64);
         assert_eq!(offset_of!(ShmHeader, ring_ui_offset), 72);
@@ -2654,6 +2656,10 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_quantize_version), 6000);
         assert_eq!(offset_of!(ShmHeader, ui_arrange_offset), 6008); // v27
         assert_eq!(offset_of!(ShmHeader, ui_arrange_bytes), 6016);
+        assert_eq!(offset_of!(ShmHeader, ui_automation_offset), 6024); // v28
+        assert_eq!(offset_of!(ShmHeader, ui_automation_slot_offset), 6040);
+        assert_eq!(offset_of!(ShmHeader, ui_sampler_kit_offset), 6064); // v32
+        assert_eq!(offset_of!(ShmHeader, ui_sampler_envelope_offset), 6144); // v37
         assert_eq!(offset_of!(ShmHeader, ui_command_outcome_offset), 6160);
         assert_eq!(offset_of!(ShmHeader, ui_command_outcome_bytes), 6168);
         // The scale + device-param region structs (v16/v17) are now generated from
