@@ -1,0 +1,101 @@
+{
+  "schema": "ae-implementation-evidence/1",
+  "ticket": "AE-P1.3-NONOVERLAP-IMPL",
+  "recorded_date": "2026-08-17",
+  "packet": {
+    "commit": "a4f7abc5e96b1770c13ed2aba92d3bb2dedd0a14",
+    "tree": "37c9a71790bb4a5fd688ee2c7e64fb827317dd9e",
+    "manifest_sha256": "da0204dd037e2a0be8c46a20e08c28b09697a4826441b659b3989fb34704794d"
+  },
+  "authorization": {
+    "commit": "397f28aa7834082146801208530e52a52992c34a",
+    "tree": "52866bef9cc92867595981351fb86f4312736cdc"
+  },
+  "frozen_product": {
+    "commit": "0d943c262393101d88e98cb94aff14783b9aa2be",
+    "tree": "27eaec16a10cae793f48cb074c07467130e471a3"
+  },
+  "implementation": {
+    "commit": "542d8838a4168f5bc7248295669e25cc6d5f6804",
+    "tree": "7bbb6900dd26f128928db01f5c81137360c63e56",
+    "branch": "main",
+    "remote": "origin/main"
+  },
+  "invariants": {
+    "shm_version_cpp": 41,
+    "shm_version_rust": 41,
+    "producer_offset_regions": 25,
+    "rust_offset_regions": 25,
+    "validator_regions": 25,
+    "compared_spans": 26,
+    "declared_exact_regions": 9,
+    "descriptor_fields_exactly_wired": 38,
+    "typed_accessors_using_cached_geometry": 19,
+    "wire_layout_changed": false
+  },
+  "reviews": [
+    {
+      "role": "memory-safety",
+      "round": 1,
+      "ruling": "PASS"
+    },
+    {
+      "role": "controls-completeness",
+      "round": 1,
+      "ruling": "BLOCKED",
+      "blockers": [
+        "UiShmDescriptor::read field-to-field wiring was not statically proved",
+        "cached-geometry enforcement recognized only one literal header-dereference syntax"
+      ]
+    },
+    {
+      "role": "controls-completeness",
+      "round": 2,
+      "ruling": "PASS",
+      "resolution": "The checker now proves all 38 descriptor destinations equal their source fields, matches the 25-offset Rust population, rejects non-descriptor production geometry selectors, and separately forbids geometry selectors throughout EngineHandle."
+    },
+    {
+      "role": "memory-safety",
+      "round": 2,
+      "ruling": "PASS",
+      "resolution": "The successor ratchets preserve validation-before-publication and eliminate mutable geometry rereads from typed accessors."
+    }
+  ],
+  "controls": [
+    {
+      "command": "python3 tools/architecture/ae_p1_3_packet_check.py",
+      "working_directory": "/Users/jak/src/daw-ae-p1-3-nonoverlap-packet",
+      "result": "PASS: 25 offset regions, 26 compared spans, 26 manifest records"
+    },
+    {
+      "command": "python3 tools/ui_shm_layout_check.py",
+      "result": "PASS: 25 producer offsets = 25 Rust offsets = 25 validator entries; 26th reserved header span; exact descriptor wiring; cached geometry only"
+    },
+    {
+      "command": "bash tools/shm_access_check.sh",
+      "result": "PASS: five masked entry-array sites and 19 bounds-checked typed accessors"
+    },
+    {
+      "command": "cargo test --manifest-path ui/Cargo.toml -p daw-bridge layout_non_overlap -- --nocapture",
+      "result": "PASS: 9 passed, 0 failed"
+    },
+    {
+      "command": "cargo test --manifest-path ui/Cargo.toml -p daw-bridge --quiet",
+      "result": "PASS: 102 passed, 0 failed"
+    },
+    {
+      "command": "cmake -S . -B build && cmake --build build",
+      "result": "PASS"
+    },
+    {
+      "command": "ctest --test-dir build --output-on-failure",
+      "implementation_commit": "542d8838a4168f5bc7248295669e25cc6d5f6804",
+      "result": "PASS: 232 passed, 0 failed, 1 expected design skip (audio_stability), 233 total"
+    },
+    {
+      "command": "cargo build --release --manifest-path ui/Cargo.toml -p daw-sidecar -p daw-cli && node ui-web/test/new-song-save.mjs",
+      "result": "PASS: release sidecar built from the changed bridge; Playwright 5/5"
+    }
+  ],
+  "ruling": "AE-P1.3 is closed: EngineHandle publishes no typed UI-SHM view until all 25 offset regions plus the reserved header are size-, bounds-, alignment-, ring-shape-, and pairwise-non-overlap-valid, and all later typed accesses consume the cached validated geometry."
+}
