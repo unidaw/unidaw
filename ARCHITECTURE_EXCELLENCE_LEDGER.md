@@ -7094,3 +7094,29 @@ block it is for, so processing order cannot change it; the type ratchets against
 itself but **not** against the block id its callers pass; sidechain is neither N−1 nor serialised;
 MIDI already satisfied the rule by a different mechanism and this should not be credited with it;
 and the serial group stays until fan-in reduces deterministically.
+
+### The step-4 backlog, re-measured rather than recited
+
+"A 43-site rewire" has been carried in this effort's working notes for many turns. Measured against
+the tree, with tests counted separately from production:
+
+| symbol | carried | measured (production) | tests |
+|---|---|---|---|
+| `chainDevices` | 23 | **23** | 0 |
+| `routesToMaster` | 8 | **11** | 4 |
+| `TrackStateSnapshot::routing` | 10 | **3** | — |
+
+Two of three are wrong, **in opposite directions**, so the total error does not announce itself as a
+consistent drift: 37 production sites, not 43.
+
+The `routing` number is the instructive one. My first attempt to count it used the predicate
+`trackSnapshot->routing` and returned **zero** — which reads exactly like "already done" and is
+instead a wrong predicate, because the field is reached through several different expressions.
+Enumerating by the *construct* rather than by a remembered spelling found three, and separately found
+that the 142 sites matching `.routing` are overwhelmingly `Track::routing` — the **authored** field,
+which step 4 does not touch — sharing a name with the snapshot field it does.
+
+**A carried count decays in both directions and cannot be trusted at the point of use.** This ledger
+already records that for a *blocked* list; the same applies to a work estimate. Re-derive it when it
+is about to decide what gets built, and count with a predicate keyed to the construct — a zero from
+the wrong predicate is indistinguishable from a finished job.
