@@ -16,6 +16,7 @@
 //   - findOrMintEnvelope must not match an LFO that shares the target
 //   - ensureDefaultModSet must NOT mint for a named-but-absent id
 #include "apps/engine_pure.h"
+#include "apps/device_id_migration.h"
 #include "apps/engine_command_mutates.h"
 #include "apps/host_chain_buffers.h"
 
@@ -163,15 +164,29 @@ void testInvertUndoEntry() {
 
 // ------------------------------------------------------------------------------ plugin naming
 void testPluginFileNames() {
-  CHECK(pluginStateFileName(0, 0) == "t0_d0.bin");
-  CHECK(pluginStateFileName(3, 12) == "t3_d12.bin");
-  CHECK(pluginParamsFileName(3, 12) == "t3_d12.params.json");
+  // The two loose-integer helpers that used to be tested here are gone; the name has ONE
+  // definition now (daw::artifactLeafName) and one legacy spelling that requires a key.
+  CHECK(daw::artifactLeafName(0, 0, daw::ArtifactKind::StateBlob) == "t0_d0.bin");
+  CHECK(daw::artifactLeafName(3, 12, daw::ArtifactKind::StateBlob) == "t3_d12.bin");
+  CHECK(daw::artifactLeafName(3, 12, daw::ArtifactKind::ParameterManifest) ==
+        "t3_d12.params.json");
 
   // The two must never collide, and the id order must not be commutative — (3,12) and (12,3) are
   // different devices and a name that conflated them would restore one plugin's state into
   // another's.
-  CHECK(pluginStateFileName(3, 12) != pluginStateFileName(12, 3));
-  CHECK(pluginStateFileName(3, 12) != pluginParamsFileName(3, 12));
+  CHECK(daw::artifactLeafName(3, 12, daw::ArtifactKind::StateBlob) !=
+        daw::artifactLeafName(12, 3, daw::ArtifactKind::StateBlob));
+  CHECK(daw::artifactLeafName(3, 12, daw::ArtifactKind::StateBlob) !=
+        daw::artifactLeafName(3, 12, daw::ArtifactKind::ParameterManifest));
+
+  // THE LEGACY SPELLING AGREES WITH THE CANONICAL ONE. A schema 1-5 file and a schema-6 file for
+  // the same {track, device} have the same NAME; only the directory differs. If these two ever
+  // disagreed, a migrated project would look for its blob under a name nothing ever wrote.
+  const daw::LegacyArtifactKey key{3, 12};
+  CHECK(daw::legacyArtifactLeafName(key, daw::ArtifactKind::StateBlob) ==
+        daw::artifactLeafName(3, 12, daw::ArtifactKind::StateBlob));
+  CHECK(daw::legacyArtifactLeafName(key, daw::ArtifactKind::ParameterManifest) ==
+        daw::artifactLeafName(3, 12, daw::ArtifactKind::ParameterManifest));
 }
 
 // ------------------------------------------------------------------------------ clipContentEnd

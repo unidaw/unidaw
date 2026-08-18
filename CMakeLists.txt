@@ -192,6 +192,7 @@ add_library(engine_commands STATIC
   apps/engine_consumer.cpp
   apps/engine_plugin_state_capture.cpp
   apps/engine_save_project.cpp
+  apps/engine_artifact_commit.cpp
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp
   apps/engine_clip_commands.cpp
@@ -450,6 +451,31 @@ target_link_libraries(automation_target_tests PRIVATE platform_juce)
 # loud.
 add_executable(sha256_tests apps/sha256_tests_main.cpp apps/sha256.cpp)
 target_include_directories(sha256_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# The four presence rows, the identity rules, the legacy migration's empty inventory, and the
+# manifest's embedded {track, device} key. NOT the stale-canonical-path case, which is about which
+# paths the loader builds and is covered by tools/artifact_path_construction_check.sh and, at
+# step 4, by T-ARTIFACT-PROVENANCE.
+add_executable(artifact_inventory_tests
+  apps/artifact_inventory_tests_main.cpp
+  apps/event_log.cpp
+  apps/project_file.cpp
+  apps/device_id_migration.cpp
+  apps/automation_target.cpp
+  apps/artifact_inventory.cpp
+  apps/engine_artifact_commit.cpp
+  apps/sha256.cpp
+  apps/device_chain.cpp
+  apps/plugin_cache.cpp
+  apps/patcher_preset.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+)
+target_include_directories(artifact_inventory_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(artifact_inventory_tests PRIVATE platform_juce)
 
 # Header-only numeric tests for the waveform pyramid (no JUCE/Boost needed).
 add_executable(waveform_pyramid_tests
@@ -1060,6 +1086,11 @@ add_test(NAME sha256
   COMMAND sha256_tests
 )
 set_tests_properties(sha256 PROPERTIES TIMEOUT 120)
+
+add_test(NAME artifact_inventory
+  COMMAND artifact_inventory_tests
+)
+set_tests_properties(artifact_inventory PROPERTIES TIMEOUT 120)
 
 add_test(NAME waveform_pyramid
   COMMAND waveform_pyramid_tests
@@ -1840,6 +1871,20 @@ add_test(NAME ripple_undo
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/ripple_undo_check.sh
 )
 set_tests_properties(ripple_undo PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+# `legacy_precedence` is a rule about which PATHS the loader builds, which no unit test can see:
+# a probe at the device's current id compiles, links, and loads a different device's patch.
+add_test(NAME artifact_path_construction
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/artifact_path_construction_check.sh
+)
+set_tests_properties(artifact_path_construction PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+# The control that would have caught the laundering: a legacy manifest whose embedded pair does
+# not match its own filename must FAIL the load, not be silently restamped to agree.
+add_test(NAME artifact_legacy_key
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/artifact_legacy_key_check.sh
+)
+set_tests_properties(artifact_legacy_key PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
 add_test(NAME save_roundtrip
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/save_roundtrip_check.sh
 )

@@ -2,6 +2,10 @@
 // bound below carry the names the lambda captured, so nested lambdas and shadowing still
 // mean what they meant, and the only claim this makes is "the same code, somewhere else".
 #include "apps/engine_save_project.h"
+#include "apps/sha256.h"
+#include "apps/engine_artifact_commit.h"
+#include "apps/artifact_inventory.h"
+#include "apps/device_id_migration.h"  // validateGlobalDeviceIds
 
 #include <fstream>
 #include "apps/engine_clip_adoption.h"
@@ -456,110 +460,241 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
         }
       }
     }
-    if (!daw::saveProject(document, path, error)) {
-      return false;
-    }
-
-    // Opaque plugin state lives beside the document, one file per device so a
-    // blob is addressable by durable id rather than by position.
+    // ---- THE ARTIFACT GENERATION IS COMMITTED BEFORE THE DOCUMENT REFERENCES IT ----
+    //
+    // AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME `save_commit_order`. This used to write
+    // project.json FIRST and then the blobs, best-effort — so an interruption between the two left
+    // a document naming state that was never written, indistinguishable from a project which
+    // genuinely had none.
+    //
+    // Now: collect every side, build and seal the inventory, write and verify a fresh generation,
+    // and only then write the document that names it. A failure anywhere before the document write
+    // leaves the previous document and its generation authoritative, because neither was touched.
     const std::filesystem::path stateDir = daw::pluginStateDirFor(path);
     std::error_code ec;
     std::filesystem::create_directories(stateDir, ec);
     if (ec) {
       DAW_EVENT("project.state_dir_failed").field("dir", stateDir.string());
-      return true;  // The document itself is saved; state is best-effort.
-    }
-    for (auto* runtime : runtimes) {
-      std::vector<daw::Device> devices;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        devices = runtime->track.chain.devices;
+      if (error != nullptr) {
+        *error = "cannot create the plugin state directory " + stateDir.string();
       }
+      return false;
+    }
+
+    // ONE POPULATION, NOT TWO. The walk below iterates the DOCUMENT's tracks and finds each one's
+    // runtime, rather than iterating runtimes and hoping the two agree.
+    //
+    // They did not agree. `document.tracks` drops a removed track, a track past liveTrackCount and
+    // an untouched aux child; the runtime list above drops none of those. Any device on one of
+    // them produced an inventory entry naming a track the document does not contain — and
+    // `entry_order` makes that entry a load failure, so the save would have written a project that
+    // could never be opened. Deriving the walk from the document makes the divergence
+    // unconstructible instead of merely unlikely, which is the difference between this being
+    // checked and being argued about.
+    //
+    // A document track with NO runtime is skipped and said out loud. That is the master today: its
+    // chain is in the document but its runtime is not in this list, so master FX have no artifacts
+    // — a gap that predates this change and is not widened by it.
+    std::vector<daw::engine::ArtifactToCommit> files;
+    for (const auto& documentTrack : document.tracks) {
+      TrackRuntime* runtime = nullptr;
+      for (auto* candidate : runtimes) {
+        if (candidate->trackId == documentTrack.trackId) {
+          runtime = candidate;
+          break;
+        }
+      }
+      if (runtime == nullptr) {
+        if (!documentTrack.chain.devices.empty()) {
+          DAW_EVENT("artifact.track_has_no_runtime")
+              .field("track", documentTrack.trackId)
+              .field("is_master", documentTrack.isMaster)
+              .field("devices", static_cast<uint64_t>(documentTrack.chain.devices.size()));
+        }
+        continue;
+      }
+      // THE DOCUMENT'S OWN CHAIN, not a second read of the runtime's. The entries describe what
+      // the document says is there, and re-reading the live chain here would let the two disagree
+      // in the window between the capture above and this loop.
+      const std::vector<daw::Device>& devices = documentTrack.chain.devices;
       uint32_t hostIndex = 0;
       for (const auto& device : devices) {
         if (device.kind != daw::DeviceKind::VstInstrument &&
             device.kind != daw::DeviceKind::VstEffect) {
           continue;
         }
+        // THREE ANSWERS AND A NON-ANSWER, per side. `save_rules`: "Present live capture replaces
+        // that side; unavailable capture emits a structured diagnostic and selects retained
+        // Present bytes or ExplicitAbsent, NEVER ambient path existence."
+        //
+        // So each side is decided here, from the host or from what the last load retained — and
+        // never by looking at whether a file happens to sit where one would be written.
+        const auto sideFor = [&](daw::ArtifactKind kind, std::vector<uint8_t> captured,
+                                 bool captureOk) {
+          if (captureOk && !captured.empty()) {
+            deps.engineState.artifactStore.retain(device.id, kind,
+                                                  daw::ArtifactSource::LiveCapture, captured);
+            daw::ArtifactEntry entry;
+            entry.trackId = runtime->trackId;
+            entry.globalDeviceId = device.id;
+            entry.kind = kind;
+            entry.leafName = daw::artifactLeafName(runtime->trackId, device.id, kind);
+            entry.size = captured.size();
+            entry.sha256 = daw::sha256Hex(captured);
+            files.push_back({std::move(entry), std::move(captured)});
+            return;
+          }
+          daw::engine::RetainedArtifact retained;
+          if (deps.engineState.artifactStore.lookup(device.id, kind, retained)) {
+            DAW_EVENT("artifact.capture_unavailable")
+                .field("track", runtime->trackId)
+                .field("device", device.id)
+                .field("kind", daw::artifactKindToString(kind))
+                .field("retained_from", daw::artifactSourceToString(retained.source));
+            // CANONICALIZED TO THE PAIR IT IS BEING WRITTEN UNDER, which
+            // `artifact_presence_matrix` row 3 requires by name:
+            // "explicit_absent_blob_and_canonicalized_manifest_entries".
+            //
+            // THE REFUSAL BELOW IS BELIEVED UNREACHABLE, and is labelled rather than removed. All
+            // three ways bytes enter this store produce a parseable manifest: LiveCapture comes
+            // from renderParameterManifest, Schema6Generation already passed manifestEmbeddedKey
+            // at load, and LegacyOldKey already passed rewriteManifestEmbeddedKey at load. If
+            // `artifact.retained_manifest_unusable` is ever emitted, one of those three statements
+            // has stopped being true — which is worth an event rather than an assert.
+            //
+            // A device keeps its artifacts when it MOVES TRACKS — that is the point of a
+            // project-global id — so retained manifest bytes routinely name the track the device
+            // used to be on. Writing them unchanged produces a manifest whose embedded key
+            // disagrees with the entry pointing at it, and the very next load refuses the project
+            // this save just wrote. Refusing here instead: bytes we cannot canonicalize are not
+            // a manifest this engine wrote, and republishing them would be the ambient-provenance
+            // guess `save_rules` forbids.
+            if (kind == daw::ArtifactKind::ParameterManifest &&
+                !daw::engine::rewriteManifestEmbeddedKey(retained.bytes, runtime->trackId,
+                                                         device.id)) {
+              DAW_EVENT("artifact.retained_manifest_unusable")
+                  .field("track", runtime->trackId)
+                  .field("device", device.id)
+                  .field("retained_from", daw::artifactSourceToString(retained.source));
+              return;
+            }
+            daw::ArtifactEntry entry;
+            entry.trackId = runtime->trackId;
+            entry.globalDeviceId = device.id;
+            entry.kind = kind;
+            entry.leafName = daw::artifactLeafName(runtime->trackId, device.id, kind);
+            entry.size = retained.bytes.size();
+            entry.sha256 = daw::sha256Hex(retained.bytes);
+            files.push_back({std::move(entry), retained.bytes});
+            return;
+          }
+          // EXPLICITLY ABSENT. No entry, no file, and nothing inferred from the directory.
+          DAW_EVENT("artifact.explicit_absent")
+              .field("track", runtime->trackId)
+              .field("device", device.id)
+              .field("kind", daw::artifactKindToString(kind));
+        };
+
         std::vector<uint8_t> blob;
-        bool ok = false;
+        bool blobOk = false;
         {
           std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-          ok = runtime->controller.requestPluginState(hostIndex, blob);
+          blobOk = runtime->controller.requestPluginState(hostIndex, blob);
         }
-        if (ok && !blob.empty()) {
-          const auto blobPath =
-              stateDir / pluginStateFileName(runtime->trackId, device.id);
-          std::ofstream out(blobPath, std::ios::binary | std::ios::trunc);
-          out.write(reinterpret_cast<const char*>(blob.data()),
-                    static_cast<std::streamsize>(blob.size()));
-        }
-        // AND THE MANIFEST. The blob above is opaque — it restores the plugin and tells a reader
-        // nothing. This is the projection the review asked for: "the difference between an
-        // assistant that can act on 'make the pad darker' and one that hallucinates". A failure
-        // to write it is not a failure to save: the manifest is derived, so it is reported and
-        // skipped rather than failing the save of the actual document.
+        const uint64_t blobBytes = blob.size();
+        sideFor(daw::ArtifactKind::StateBlob, std::move(blob), blobOk);
+
+        // AND THE MANIFEST, an INDEPENDENT optional outcome — `save_rules` says so, and it matters:
+        // a plugin can answer with its state and not its parameter list, and the two sides must not
+        // take each other down. The blob is opaque and tells a reader nothing; this says what the
+        // knobs WERE, readable without the plugin installed.
         uint32_t manifestCount = 0;
+        std::vector<daw::HostParamWire> wire;
+        std::string hostPluginName;
+        bool paramsOk = false;
         {
-          std::vector<daw::HostParamWire> wire;
-          std::string hostPluginName;
-          bool gotParams = false;
-          {
-            std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-            gotParams =
-                runtime->controller.requestPluginParams(hostIndex, wire, hostPluginName);
-          }
-          if (gotParams && !wire.empty()) {
-            const auto manifestPath =
-                stateDir / pluginParamsFileName(runtime->trackId, device.id);
-            std::ofstream mf(manifestPath, std::ios::trunc);
-            auto esc = [](const char* raw, size_t cap) {
-              std::string out;
-              const size_t n = ::strnlen(raw, cap);
-              for (size_t i = 0; i < n; ++i) {
-                const char c = raw[i];
-                if (c == '"' || c == '\\') {
-                  out.push_back('\\');
-                  out.push_back(c);
-                } else if (static_cast<unsigned char>(c) >= 0x20) {
-                  out.push_back(c);
-                }
-              }
-              return out;
-            };
-            mf << "{\n  \"plugin\": \"" << esc(hostPluginName.c_str(), hostPluginName.size())
-               << "\",\n  \"track\": " << runtime->trackId
-               << ",\n  \"device\": " << device.id << ",\n  \"params\": [\n";
-            for (size_t i = 0; i < wire.size(); ++i) {
-              const auto& w = wire[i];
-              mf << "    { \"index\": " << w.index
-                 << ", \"id\": \"" << esc(w.stableId, sizeof(w.stableId))
-                 << "\", \"name\": \"" << esc(w.name, sizeof(w.name))
-                 << "\", \"unit\": \"" << esc(w.label, sizeof(w.label))
-                 << "\", \"value\": " << w.normalized
-                 << ", \"display\": \"" << esc(w.display, sizeof(w.display))
-                 << "\", \"min\": \"" << esc(w.minText, sizeof(w.minText))
-                 << "\", \"max\": \"" << esc(w.maxText, sizeof(w.maxText))
-                 << "\", \"default\": " << w.defaultNormalized
-                 << ", \"steps\": " << w.stepCount
-                 << ", \"discrete\": "
-                 << ((w.flags & daw::kHostParamDiscrete) ? "true" : "false")
-                 << ", \"automatable\": "
-                 << ((w.flags & daw::kHostParamAutomatable) ? "true" : "false")
-                 << " }" << (i + 1 == wire.size() ? "" : ",") << "\n";
-            }
-            mf << "  ]\n}\n";
-            manifestCount = static_cast<uint32_t>(wire.size());
-          }
+          std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+          paramsOk = runtime->controller.requestPluginParams(hostIndex, wire, hostPluginName);
         }
+        std::vector<uint8_t> manifest;
+        if (paramsOk && !wire.empty()) {
+          const std::string text =
+              daw::engine::renderParameterManifest(hostPluginName, runtime->trackId, device.id,
+                                                   wire);
+          manifest.assign(text.begin(), text.end());
+          manifestCount = static_cast<uint32_t>(wire.size());
+        }
+        sideFor(daw::ArtifactKind::ParameterManifest, std::move(manifest),
+                paramsOk && manifestCount != 0);
+
         DAW_EVENT("project.state_captured")
             .field("track", runtime->trackId)
             .field("device", device.id)
-            .field("bytes", static_cast<uint64_t>(blob.size()))
+            .field("bytes", blobBytes)
             .field("params_manifested", manifestCount)
-            .field("ok", ok);
+            .field("ok", blobOk);
         hostIndex++;
       }
+    }
+
+    // SEAL, THEN COMMIT, THEN WRITE THE DOCUMENT. The inventory names the generation, the
+    // generation directory is named by the inventory's digest, and the document is only written
+    // once that directory is on disk and verified.
+    document.artifactEntries.clear();
+    for (const auto& file : files) {
+      document.artifactEntries.push_back(file.entry);
+    }
+    daw::sealArtifactInventory(document);
+    std::sort(files.begin(), files.end(),
+              [](const daw::engine::ArtifactToCommit& a, const daw::engine::ArtifactToCommit& b) {
+                return daw::artifactEntryLess(a.entry, b.entry);
+              });
+
+    // THE DOCUMENT IS VALIDATED BEFORE IT IS WRITTEN, by BOTH functions the loader uses.
+    //
+    // `entry_order`: "duplicate, unknown-device, wrong-track, wrong-kind, noncanonical-leaf, size,
+    // or digest mismatch fails before publication." Until these calls the two populations were
+    // decided by two different predicates — `document.tracks` is filtered for persistence and for
+    // aux children, the artifact walk was not — and the only thing that noticed a divergence was
+    // the NEXT load, which would refuse a project the user had already been told was saved.
+    //
+    // BOTH, because deserializeProject runs two: validateGlobalDeviceIds and
+    // validateArtifactInventory. Running only the second still let a save write a document the
+    // load refuses — a duplicate device id across two tracks, an id at or above next_device_id, or
+    // a stem holding a device all pass the inventory check and fail the id check. "A save that
+    // cannot produce a loadable document must fail as a save" is only true if the save asks every
+    // question the load asks.
+    std::string documentError;
+    if (!daw::validateGlobalDeviceIds(document, &documentError)) {
+      DAW_EVENT("artifact.document_invalid").field("reason", documentError);
+      if (error != nullptr) {
+        *error = documentError;
+      }
+      return false;
+    }
+    if (!daw::validateArtifactInventory(document, &documentError)) {
+      DAW_EVENT("artifact.inventory_invalid").field("reason", documentError);
+      if (error != nullptr) {
+        *error = documentError;
+      }
+      return false;
+    }
+
+    std::string artifactError;
+    if (!daw::engine::commitArtifactGeneration(stateDir.string(), document.artifactGeneration,
+                                               files, &artifactError)) {
+      // THE DOCUMENT REFERENCE IS NOT REPLACED. `save_rules`: "a failed available-artifact write
+      // returns an artifact error and the ProjectDocument reference is not replaced." The project
+      // on disk still names its own complete generation.
+      DAW_EVENT("artifact.commit_failed").field("reason", artifactError);
+      if (error != nullptr) {
+        *error = artifactError;
+      }
+      return false;
+    }
+
+    if (!daw::saveProject(document, path, error)) {
+      return false;
     }
     return true;
   }

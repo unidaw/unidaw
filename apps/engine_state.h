@@ -30,6 +30,7 @@
 #include "apps/engine_arrange_rail.h"
 #include "apps/engine_aux_child_overlays.h"
 #include "apps/engine_clip_window.h"
+#include "apps/engine_artifact_store.h"
 #include "apps/engine_device_id_watermark.h"
 #include "apps/engine_document_history.h"
 #include "apps/engine_loaded_project.h"
@@ -66,6 +67,11 @@ struct EngineState {
   // of the DOCUMENT rather than of any track — which is the whole change: it used to be computed
   // per chain, so two tracks each numbered a device 1. See its own header.
   DeviceIdWatermark deviceIdWatermark;
+
+  // What the engine still holds of each plugin's state blob and parameter manifest, and where it
+  // came from. Beside the watermark because both are properties of the loaded PROJECT rather than
+  // of any track — see its own header for why bytes and not paths.
+  ArtifactStore artifactStore;
 
   // The patcher pool, assembled from the devices that reference it.
   PatcherGraphOwner patcherGraph;

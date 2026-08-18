@@ -253,6 +253,17 @@ print("  shifted fixture: a third document track inserted, so the stems land at 
 PYSHIFT
 [ $? -eq 0 ] || exit 1
 
+# AND ITS ARTIFACTS COME WITH IT. A schema-6 document names an immutable generation directory and
+# commits every plugin artifact in it by digest (AE-P1.2 G2-B item 18), so a document and its
+# `<name>.state/generations/<generation>/` are ONE UNIT. Copying the json alone produced a project
+# claiming a blob that was not there, which the load now refuses outright — correctly: that is
+# `present_file_rules`. The edit this fixture makes is "insert a track", not "throw the plugin
+# state away", so the state directory is copied with it.
+cp -R "$TMP/moout.uniproj.state" "$TMP/shifted.uniproj.state" 2>/dev/null || {
+  echo "  FAIL: could not copy the state directory alongside the shifted fixture"
+  exit 1
+}
+
 SHM3="/mop3_$$"
 ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 20 >"$TMP/eng3.log" 2>&1 ) &

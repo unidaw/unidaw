@@ -1,6 +1,7 @@
 #include "apps/project_file.h"
 
 #include "apps/artifact_inventory.h"
+#include "apps/sha256.h"
 #include "apps/device_id_migration.h"
 
 #include "apps/sampler_serialize.h"
@@ -1658,30 +1659,63 @@ bool saveProjectModule(const ProjectDocument& document,
   // The blobs are opaque and belong to the plugin; the `.params.json` manifests beside them are
   // readable without it. Both are packed: the manifest is what makes a received module tell you
   // what the knobs WERE even when you do not own the plugin.
+  // AN UNUSABLE STATE DIRECTORY IS A FAILURE WHEN THE DOCUMENT CLAIMS ENTRIES, and only then.
+  //
+  // This sits OUTSIDE the `!stateBaseDir.empty()` guard on purpose. The loop below used to be
+  // skipped whenever the directory was missing — harmless while the document made no claims about
+  // its artifacts, and a silent drop now that it does: the packed project.json would list entries
+  // the archive does not contain, so the receiving load refuses it. That is the same failure the
+  // comment above refuses ("a module that quietly drops a plugin's state is only found out after
+  // it has been sent"), arriving through the door the guard left open.
+  //
+  // An EMPTY base directory is the second door. It is unreachable from the product — the only
+  // caller passes pluginStateDirFor(loosePath) — but "no caller does this today" is the reasoning
+  // that put the first door there.
+  {
+    std::error_code ec;
+    if (!packed.artifactEntries.empty() &&
+        (stateBaseDir.empty() || !std::filesystem::is_directory(stateBaseDir, ec))) {
+      return fail("the project claims " + std::to_string(packed.artifactEntries.size()) +
+                  " plugin artifact(s) but has no usable state directory" +
+                  (stateBaseDir.empty() ? std::string(" (none was given)")
+                                        : " at " + stateBaseDir));
+    }
+  }
   if (!stateBaseDir.empty()) {
     std::error_code ec;
     if (std::filesystem::is_directory(stateBaseDir, ec)) {
-      // SORTED, because two saves of one project must be byte-identical — the property
-      // module_check.sh asserts and the reason the zip timestamp is pinned to the format epoch.
-      // directory_iterator order is unspecified and in practice is inode order, so packing in
-      // whatever order the filesystem offers would make a re-save a spurious diff.
-      std::vector<std::string> names;
-      for (const auto& entry : std::filesystem::directory_iterator(stateBaseDir, ec)) {
-        if (entry.is_regular_file(ec)) {
-          names.push_back(entry.path().filename().string());
-        }
-      }
-      std::sort(names.begin(), names.end());
-      const std::string prefix = moduleStatePrefix();
-      for (const auto& name : names) {
+      // THE DOCUMENT'S OWN INVENTORY, and nothing else. `package_rules`: module assembly
+      // "consumes only the artifact_generation and artifact_entries referenced by the exact
+      // ProjectDocument, verifies every listed path, size, digest, hosted-device identity, kind,
+      // and canonical leaf, permits either side to have no entry, and NEVER ENUMERATES or admits
+      // an ambient state-directory filename."
+      //
+      // This used to iterate the state directory and pack whatever it found. That is how a module
+      // ships a file belonging to a device the project no longer has, or one left behind by an
+      // older save under a name a renumbered device now answers to — sent to someone else, where
+      // it opens and sounds wrong. Iterating also had to be SORTED to keep two saves
+      // byte-identical; the inventory is already sorted, so the ordering is a property of the
+      // document rather than a precaution here.
+      const std::string prefix = moduleStatePrefix() + artifactGenerationSubdir(
+                                     packed.artifactGeneration);
+      const std::string generationDir =
+          artifactGenerationDir(stateBaseDir, packed.artifactGeneration);
+      for (const auto& entry : packed.artifactEntries) {
+        const std::string onDisk = joinDir(generationDir, entry.leafName);
         bool ok = false;
-        std::vector<uint8_t> bytes = readWholeFile(joinDir(stateBaseDir, name), &ok);
+        std::vector<uint8_t> bytes = readWholeFile(onDisk, &ok);
         if (!ok) {
-          // REFUSED, not skipped — the same rule as a missing sample, and for the same reason.
-          return fail("cannot read plugin state " + joinDir(stateBaseDir, name));
+          // REFUSED, not skipped — the same rule as a missing sample, and for the same reason: a
+          // module that quietly drops a plugin's state is only found out after it has been sent.
+          return fail("cannot read plugin state " + onDisk);
+        }
+        if (bytes.size() != entry.size || sha256Hex(bytes) != entry.sha256) {
+          // VERIFIED ON THE WAY IN. The document commits these bytes by digest; packing something
+          // else would produce a module that opens and restores a patch the sender never had.
+          return fail("plugin state " + onDisk + " does not match the inventory digest");
         }
         ZipEntry e;
-        e.name = prefix + name;
+        e.name = prefix + entry.leafName;
         e.data = std::move(bytes);
         entries.push_back(std::move(e));
       }

@@ -93,7 +93,30 @@ wait "$ENG" 2>/dev/null || true
   echo "save_roundtrip_check: FAIL — engine did not write the seeded save"; rm -rf "$TMP"; exit 1; }
 
 # Normalize the project name (it legitimately follows the save filename) before diffing.
-norm() { sed 's/"name": "v4[ab]"/"name": "v4"/'; }
+#
+# AND THE ARTIFACT DIGESTS, which are volatile for a reason worth writing down. A schema-6 document
+# commits each plugin artifact by its SHA-256 (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME), and the
+# sequence here is load -> save -> LOAD -> save: the second capture comes from plugin instances
+# that were torn down and recreated with the first save's blob pushed back into them. Measured on
+# maximal: the manifests are byte-identical across both saves, and the blobs are not — the same
+# size, ~200 bytes different, in the parameter values. Pushing a VST3 state chunk and re-capturing
+# it does not round-trip byte-exactly, which is a property of the plugin and its wrapper rather
+# than of the save.
+#
+# That was invisible until the document started carrying digests, so this is a fact the change
+# EXPOSED rather than caused. Nothing is lost: the blob that travels is exactly the one the
+# document names, and the module check proves it unpacks byte-identical.
+#
+# NORMALIZED PRECISELY, NOT WHOLESALE. `sha256`, `size` and `artifact_generation` are blanked;
+# `track_id`, `device_id`, `kind` and `leaf` are NOT — so this check still fails if an artifact
+# appears, vanishes, or changes which device it belongs to, which is what it is for. Blanking the
+# whole inventory would have made the shape of the inventory unwatched.
+norm() {
+  sed -e 's/"name": "v4[ab]"/"name": "v4"/' \
+      -e 's/"artifact_generation": "[0-9a-f]*"/"artifact_generation": "<volatile>"/' \
+      -e 's/"sha256": "[0-9a-f]*"/"sha256": "<volatile>"/' \
+      -e 's/"size": [0-9]*/"size": <volatile>/'
+}
 ok=1
 if diff <(norm < "$TMP/v4a.uniproj.json") <(norm < "$TMP/v4b.uniproj.json") >/dev/null 2>&1; then
   echo "  schema-4 save->load->save is byte-identical"

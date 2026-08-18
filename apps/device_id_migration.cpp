@@ -7,6 +7,15 @@
 #include "apps/stable_device_id.h"
 
 namespace daw {
+
+// The flat legacy leaf, derived from the SAME rule as every other leaf name. It is not a second
+// naming scheme — a schema 1-5 file and a schema-6 file with the same {track, device} have the
+// same name; what differs is the directory they live in, and that is the whole of the migration's
+// path problem.
+std::string legacyArtifactLeafName(const LegacyArtifactKey& key, ArtifactKind kind) {
+  return artifactLeafName(key.trackId, key.oldDeviceId, kind);
+}
+
 namespace {
 
 void setError(std::string* error, const std::string& message) {

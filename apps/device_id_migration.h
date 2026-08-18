@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "apps/artifact_inventory.h"  // ArtifactKind
 #include "apps/project_file.h"
 
 // TURNING TRACK-SCOPED DEVICE IDS INTO PROJECT-GLOBAL ONES, once, at load.
@@ -46,6 +47,25 @@ struct LegacyArtifactKey {
     return !(a == b);
   }
 };
+
+// THE FLAT LEGACY PATH, AND THE ONLY WAY TO SPELL ONE.
+//
+// AE-P1.2 G2-B item 18, `legacy_precedence`: "when the old and newly allocated filenames differ,
+// the importer never probes the new path, so a pre-existing canonical-looking file has no
+// provenance and cannot enter the inventory."
+//
+// That rule is about which paths the code BUILDS, and it used to be carried by two free functions
+// taking `(uint32_t trackId, uint32_t deviceId)` — a signature that accepts the device's CURRENT
+// id just as happily as the one it was saved under. The grep meant to catch the difference was
+// defeated three ways by a reviewer: through `artifactLeafName`, which those helpers forwarded to
+// and which produces byte-identical output; through a one-line wrapper; and by satisfying the
+// check's own population counter with two comment lines.
+//
+// So the surface is REMOVED rather than watched. This takes a LegacyArtifactKey, and a
+// LegacyArtifactKey is produced in exactly one place — migrateTrackScopedDeviceIds, reading it off
+// the document being imported. Passing a current device id is no longer a mistake a caller can
+// make quietly; there is no overload that accepts one.
+std::string legacyArtifactLeafName(const LegacyArtifactKey& key, ArtifactKind kind);
 
 // What a migration produced. Empty `map` with `migrated == false` means the document was already
 // project-global (schema 6) and nothing was rewritten.

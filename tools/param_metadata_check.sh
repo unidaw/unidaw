@@ -174,7 +174,16 @@ echo "  discriminates: Mode is a 3-step switch, unautomatable, reading 'Off' —
 # ---- PERSISTS. The manifest lands beside the opaque blob.
 cli do save pmout --force >/dev/null 2>&1 || true
 sleep 1.8
-MANIFEST="$TMP/pmout.uniproj.state/t0_d1.params.json"
+# UNDER THE GENERATION THE DOCUMENT NAMES, not at a flat path. AE-P1.2 G2-B item 18,
+# R-DEVICE-ID-LIFETIME: a schema-6 project carries an artifact inventory and its files live at
+# `<state dir>/generations/<artifact_generation>/<leaf>`, so a stale canonical-looking file at the
+# old root is unreachable rather than merely unlikely.
+#
+# READ FROM THE DOCUMENT, not globbed: `generations/*/` would find whichever generation happened to
+# be on disk, which is exactly the provenance-by-coincidence the inventory removes — and this check
+# would then pass against a manifest the project does not reference.
+PM_GEN="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['artifact_generation'])" "$TMP/pmout.uniproj.json")"
+MANIFEST="$TMP/pmout.uniproj.state/generations/$PM_GEN/t0_d1.params.json"
 [ -f "$MANIFEST" ] || \
   fail "no parameter manifest at $MANIFEST. The state blob beside it is the plugin's private
         data and says nothing to anyone but the plugin — a project opened without this plugin

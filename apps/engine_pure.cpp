@@ -113,19 +113,9 @@ daw::UndoEntry invertUndoEntry(const daw::UndoEntry& entry) {
 
 // BOTH FORWARD TO daw::artifactLeafName, and neither spells the name itself any more.
 //
-// AE-P1.2 G2-B item 18 requires an inventory entry's `leafName` to EQUAL the filename helper. Two
-// places computing it is two rules that agree until somebody edits one — and the failure would be
-// an entry the load cannot resolve, reported as a missing artifact rather than as a naming
-// disagreement. These stay because the engine's save and load call them and the names read well
-// at those sites; what moved is the rule, not the interface.
-std::string pluginStateFileName(uint32_t trackId, uint32_t deviceId) {
-  return daw::artifactLeafName(trackId, deviceId, daw::ArtifactKind::StateBlob);
-}
-
-std::string pluginParamsFileName(uint32_t trackId, uint32_t deviceId) {
-  return daw::artifactLeafName(trackId, deviceId, daw::ArtifactKind::ParameterManifest);
-}
-
+// AE-P1.2 G2-B item 18 requires an inventory entry's `leafName` to EQUAL the filename helper, so
+// there is ONE rule and it lives in apps/artifact_inventory.*. The two forwarding helpers that
+// used to sit here were removed with it: see the note in apps/engine_pure.h.
 uint64_t clipContentEnd(const daw::MusicalClip& clip) {
   uint64_t end = 0;
   for (const auto& e : clip.events()) {

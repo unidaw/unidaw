@@ -41,6 +41,18 @@ enum class ArtifactKind : uint8_t {
   ParameterManifest = 1,
 };
 
+// WHERE A RETAINED SIDE'S BYTES CAME FROM. Transient — it is never serialized — but it is the
+// thing that makes provenance decidable at save time: `save_rules` permits live capture, retained
+// Present bytes, or explicit absence, and forbids inferring presence from a path that happens to
+// exist. Naming the three sources is what stops a fourth being added by accident.
+enum class ArtifactSource : uint8_t {
+  LegacyOldKey = 0,       // a schema 1-5 project's t<track>_d<device> path
+  Schema6Generation = 1,  // this document's own verified inventory
+  LiveCapture = 2,        // the host was asked and answered
+};
+
+const char* artifactSourceToString(ArtifactSource source);
+
 const char* artifactKindToString(ArtifactKind kind);
 bool artifactKindFromString(const std::string& text, ArtifactKind& out);
 
@@ -69,10 +81,12 @@ bool artifactEntryLess(const ArtifactEntry& a, const ArtifactEntry& b);
 
 // THE CANONICAL LEAF NAME, and the ONLY definition of it.
 //
-// `pluginStateFileName` / `pluginParamsFileName` in apps/engine_pure.h now forward here. They
-// predate the inventory and are still what the engine's save and load call; having them compute
-// the name themselves would be a second rule that agrees until somebody edits one, and the
-// contract requires `leafName` to EQUAL the filename helper.
+// It is the only one. The two loose-integer helpers in apps/engine_pure.h that used to forward
+// here were REMOVED: a signature taking `(trackId, deviceId)` accepts a device's current id as
+// readily as the one it was saved under, which is exactly the probe `legacy_precedence` forbids.
+// The schema 1-5 spelling is daw::legacyArtifactLeafName, which cannot be called without a
+// LegacyArtifactKey. Two places computing a name would be two rules that agree until somebody
+// edits one, and the contract requires `leafName` to EQUAL the filename helper.
 std::string artifactLeafName(uint32_t trackId, uint32_t deviceId, ArtifactKind kind);
 
 // The immutable id of an inventory: lowercase SHA-256 over the canonical form of the SORTED

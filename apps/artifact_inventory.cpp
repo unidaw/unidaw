@@ -41,6 +41,15 @@ bool isHostedKind(DeviceKind kind) {
 
 }  // namespace
 
+const char* artifactSourceToString(ArtifactSource source) {
+  switch (source) {
+    case ArtifactSource::LegacyOldKey: return "legacy_old_key";
+    case ArtifactSource::Schema6Generation: return "schema6_generation";
+    case ArtifactSource::LiveCapture: return "live_capture";
+  }
+  return "live_capture";
+}
+
 const char* artifactKindToString(ArtifactKind kind) {
   // NO `default:` — a new kind must fail to compile here rather than serialise as whichever
   // fallback happened to be written.
@@ -73,12 +82,20 @@ std::string artifactGenerationId(const std::vector<ArtifactEntry>& sortedEntries
   // same digest by concatenation. A leaf name containing a newline would otherwise be able to
   // forge the boundary between entries; the length prefix makes the encoding unambiguous
   // regardless of what the name holds.
+  //
+  // BOTH FREE-FORM FIELDS ARE PREFIXED, not only the leaf. `sha256` is a 64-hex string everywhere
+  // the product produces one, but this function takes a vector rather than a validated document,
+  // and with only the leaf prefixed a digest holding a space could move the boundary instead:
+  //   {sha256:"d",  leaf:"1 b"}  and  {sha256:"d 3", leaf:"b"}  both encode as  `... d 3 1 b`.
+  // Reachable only through a caller that has not validated, which is exactly the caller a
+  // canonical form has to be safe for.
   std::ostringstream canonical;
   canonical << "artifact_generation_v1\n" << sortedEntries.size() << "\n";
   for (const auto& entry : sortedEntries) {
     canonical << entry.trackId << ' ' << entry.globalDeviceId << ' '
-              << artifactKindToString(entry.kind) << ' ' << entry.size << ' ' << entry.sha256
-              << ' ' << entry.leafName.size() << ' ' << entry.leafName << '\n';
+              << artifactKindToString(entry.kind) << ' ' << entry.size << ' '
+              << entry.sha256.size() << ' ' << entry.sha256 << ' '
+              << entry.leafName.size() << ' ' << entry.leafName << '\n';
   }
   return sha256Hex(canonical.str());
 }
@@ -132,6 +149,17 @@ bool validateArtifactInventory(const ProjectDocument& document, std::string* err
       setError(error, where + ": not a device identity");
       return false;
     }
+    // DUPLICATES BEFORE OWNERSHIP, and the order is the difference between a live branch and a
+    // dead one. Two entries sharing {device, kind} either share a trackId — caught above, because
+    // artifactEntryLess makes them compare equal and the strict-increase check fires — or differ
+    // in it, in which case the ownership test below would report "that device is on track N" for
+    // what is really a duplicate. Asking the narrower question first is what lets this error
+    // exist at all.
+    if (!seen.emplace(std::make_pair(entry.globalDeviceId, static_cast<uint8_t>(entry.kind)), i)
+             .second) {
+      setError(error, where + ": a second entry for the same device and kind");
+      return false;
+    }
     const auto owner = hostedOwner.find(entry.globalDeviceId);
     if (owner == hostedOwner.end()) {
       setError(error, where + ": names no hosted device in this project");
@@ -139,11 +167,6 @@ bool validateArtifactInventory(const ProjectDocument& document, std::string* err
     }
     if (owner->second != entry.trackId) {
       setError(error, where + ": that device is on track " + std::to_string(owner->second));
-      return false;
-    }
-    if (!seen.emplace(std::make_pair(entry.globalDeviceId, static_cast<uint8_t>(entry.kind)), i)
-             .second) {
-      setError(error, where + ": a second entry for the same device and kind");
       return false;
     }
     if (entry.leafName != artifactLeafName(entry.trackId, entry.globalDeviceId, entry.kind)) {

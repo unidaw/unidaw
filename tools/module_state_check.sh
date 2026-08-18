@@ -193,26 +193,39 @@ grep '"event":"project.module_saved"' "$HOME_DIR/eng.log" | tail -1 | grep -q '"
 [ -s "$HOME_DIR/song.uni" ] || fail "no song.uni was written"
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 
-BLOB="$HOME_DIR/song.uniproj.state/t0_d1.bin"
+# WHERE THE BLOB IS NOW: under the generation the DOCUMENT names, not at a flat path this check
+# could guess. AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME — a schema-6 project carries an
+# artifact inventory and its files live at
+# `<state dir>/generations/<artifact_generation>/<leaf>`, so that a stale canonical-looking file
+# at the old root is unreachable rather than merely unlikely.
+#
+# READ FROM THE DOCUMENT rather than globbed: globbing `generations/*/` would find whichever
+# generation happened to be there, which is the provenance-by-coincidence the change removes — and
+# this check would then pass against a file the project does not reference.
+gen_of() {  # gen_of <project.json> -> the artifact_generation it names
+  python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['artifact_generation'])" "$1"
+}
+GEN="$(gen_of "$HOME_DIR/song.uniproj.json")"
+BLOB="$HOME_DIR/song.uniproj.state/generations/$GEN/t0_d1.bin"
 [ -s "$BLOB" ] || \
   fail "the loose save wrote no state blob at $BLOB, so there was nothing for the module to pack
         and the rest of this check would pass vacuously:
-        $(ls "$HOME_DIR/song.uniproj.state" 2>/dev/null | tr '\n' ' ')"
+        generation $GEN holds: $(ls "$HOME_DIR/song.uniproj.state/generations/$GEN" 2>/dev/null | tr '\n' ' ')"
 cp "$BLOB" "$HOME_DIR/original.bin"
 
 if command -v unzip >/dev/null 2>&1; then
   LISTING="$(unzip -l "$HOME_DIR/song.uni" 2>&1)"
   [ -n "$LISTING" ] || fail "unzip -l printed NOTHING for song.uni"
-  printf '%s' "$LISTING" | grep -q 'project.state/t0_d1.bin' || \
-    fail "the module does not contain project.state/t0_d1.bin — the plugin's state is NOT in the
+  printf '%s' "$LISTING" | grep -q "project.state/generations/$GEN/t0_d1.bin" || \
+    fail "the module does not contain project.state/generations/$GEN/t0_d1.bin — the plugin's state is NOT in the
         file, so every synth in this module is silent on the other machine. Listing:
 $LISTING"
   # The manifest too: it is the half that is readable WITHOUT the plugin installed, which is the
   # only thing a received module can offer someone who does not own it.
-  printf '%s' "$LISTING" | grep -q 'project.state/t0_d1.params.json' || \
+  printf '%s' "$LISTING" | grep -q "project.state/generations/$GEN/t0_d1.params.json" || \
     fail "the module carries the opaque blob but not its parameter manifest. Listing:
 $LISTING"
-  echo "  packs: project.state/t0_d1.bin and its .params.json are inside the module"
+  echo "  packs: project.state/generations/$GEN/t0_d1.bin and its .params.json are inside the module"
 else
   echo "  note: unzip not present, skipping the listing check"
 fi
@@ -239,7 +252,8 @@ grep '"event":"project.module_loaded"' "$AWAY_DIR/eng.log" | tail -1 | grep -q '
   fail "the module did not load on the other machine:
         $(grep -o '\"event\":\"project.module_loaded\"[^}]*' "$AWAY_DIR/eng.log" | tail -1)"
 
-UNPACKED="$AWAY_DIR/song/project.state/t0_d1.bin"
+AWAY_GEN="$(gen_of "$AWAY_DIR/song/project.json")"
+UNPACKED="$AWAY_DIR/song/project.state/generations/$AWAY_GEN/t0_d1.bin"
 [ -s "$UNPACKED" ] || \
   fail "no state blob at $UNPACKED after the move. The archive prefix is derived from
         pluginStateDirFor(project.json), so the unpacker's generic write-every-entry loop should

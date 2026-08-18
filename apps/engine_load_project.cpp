@@ -1,6 +1,9 @@
 #include "engine_load_project.h"
 
+#include "apps/artifact_inventory.h"
 #include "apps/device_id_migration.h"
+#include "apps/engine_artifact_commit.h"  // manifestEmbeddedKey / rewriteManifestEmbeddedKey
+#include "apps/sha256.h"
 #include "apps/engine_clip_adoption.h"
 #include "apps/engine_rt_helpers.h"  // tearDownHostState
 #include "apps/engine_load_patcher_pool.h"
@@ -11,6 +14,8 @@
 // includes, which describe where it used to live rather than what it uses.
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <utility>
 
 #include "engine_pure.h"
 #include "event_log.h"
@@ -682,117 +687,396 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
     return true;
 }
 
-// PUSH THE SAVED PLUGIN BLOBS BACK INTO THE HOSTS — a FILE-OPEN action, and only that.
+namespace {
+
+void setLoadError(std::string* error, const std::string& message) {
+  if (error != nullptr) {
+    *error = message;
+  }
+}
+
+
+// WHICH TRACK HOLDS THIS DEVICE, in the document as migrated. A legacy manifest is rewritten to
+// the pair it is being adopted under, and that pair is {this track, this device} — not the pair in
+// the file, which is the OLD one by definition when the migration renumbered anything.
 //
-// This lived inside applyDocument until undo started calling that function. Plugin state is NOT in
-// ProjectDocument (Device has no params field; the blobs live in <project>/.state/*.bin), so undo
-// was not restoring anything here — it was OVERWRITING LIVE STATE WITH LAST-SAVED STATE. Tweak a
-// cutoff, do not save, type a note, press Ctrl-Z: the note came back AND the plugin snapped to
-// whatever was on disk. Review finding #123 item 6.
-//
-// Moving it rather than gating it with a flag, for the same reason as the loop region in 53b77d5:
-// applying a document and replacing the session are two different operations, and only one of them
-// is undo. A bool would have hidden that distinction behind a parameter nobody reads.
-//
-// The body below is the block from applyDocument, moved verbatim.
-static void restorePluginStateFromDisk(LoadProjectDeps& deps,
-                                       const daw::ProjectDocument& document,
-                                       const std::string& path,
-                                       const daw::DeviceIdMigration& migration) {
-  auto& tracks = deps.engineState.trackTable.tracks;
-  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
-    // Restore plugin state. The chain was just rebuilt from the project above,
-    // so on a clean reopen the live chain matches the saved one and state lands;
-    // if a live reconcile diverged it is reported rather than pushed into the
-    // wrong plugin.
-    const std::filesystem::path stateDir = daw::pluginStateDirFor(path);
-    for (const auto& source : document.tracks) {
-      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, source.trackId);
-      if (!runtime) {
-        continue;
-      }
-      std::vector<daw::Device> liveDevices;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        liveDevices = runtime->track.chain.devices;
-      }
-      auto vstIds = [](const std::vector<daw::Device>& devices) {
-        std::vector<uint32_t> ids;
-        for (const auto& device : devices) {
-          if (device.kind == daw::DeviceKind::VstInstrument ||
-              device.kind == daw::DeviceKind::VstEffect) {
-            ids.push_back(device.id);
-          }
-        }
-        return ids;
-      };
-      const auto savedIds = vstIds(source.chain.devices);
-      const auto liveIds = vstIds(liveDevices);
-      if (savedIds != liveIds) {
-        DAW_EVENT("project.state_chain_mismatch")
-            .field("track", source.trackId)
-            .field("saved_plugins", static_cast<uint64_t>(savedIds.size()))
-            .field("live_plugins", static_cast<uint64_t>(liveIds.size()));
-        continue;
-      }
-      for (size_t hostIndex = 0; hostIndex < savedIds.size(); ++hostIndex) {
-        // WHERE A MIGRATED DEVICE'S BLOB ACTUALLY IS. The blob is named for the id the device had
-        // WHEN IT WAS SAVED, and a schema 1-5 load may have renumbered that device on the way in
-        // (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME: two tracks each holding device 1 cannot
-        // both keep it). Looking only under the NEW id finds nothing, `continue`s without a word,
-        // and the next save writes the new name — orphaning the old blob permanently. The user
-        // opens their project, every plugin is at factory defaults, and nothing reports it.
-        //
-        // `legacyArtifactKeys` exists for exactly this and is the map's own record of what each
-        // hosted device used to be called, so this is a lookup rather than a second derivation.
-        // The CURRENT name is tried first: a schema-6 document has no migration and must not pay
-        // for one, and a device that kept its id resolves identically either way.
-        std::filesystem::path blobPath =
-            stateDir / pluginStateFileName(source.trackId, savedIds[hostIndex]);
-        std::ifstream in(blobPath, std::ios::binary);
-        if (!in) {
-          const auto legacy = migration.legacyArtifactKeys.find(savedIds[hostIndex]);
-          if (legacy != migration.legacyArtifactKeys.end()) {
-            const auto legacyPath = stateDir / pluginStateFileName(legacy->second.trackId,
-                                                                   legacy->second.oldDeviceId);
-            in.clear();
-            in.open(legacyPath, std::ios::binary);
-            if (in) {
-              DAW_EVENT("project.state_restored_from_legacy_key")
-                  .field("track", source.trackId)
-                  .field("device", savedIds[hostIndex])
-                  .field("old_track", legacy->second.trackId)
-                  .field("old_device", legacy->second.oldDeviceId);
-              blobPath = legacyPath;
-            }
-          }
-        }
-        if (!in) {
-          continue;
-        }
-        std::vector<uint8_t> blob((std::istreambuf_iterator<char>(in)),
-                                  std::istreambuf_iterator<char>());
-        // THE HOST MUST BE READY. On the common path it is — setupTrackRuntime launches
-        // synchronously and rebuildHostForChain keeps it up — but when the chain reconcile FAILS it
-        // sets hostReady=false plus needsRestart and returns, the restart worker relaunches on
-        // another thread, and this runs immediately after on the load thread. `ok` would then be
-        // true for a push into a host about to be SIGKILLed, because clearing readiness does not
-        // close the socket.
-        const bool hostRunning = runtime->hostReady.load(std::memory_order_acquire);
-        bool ok = false;
-        if (hostRunning) {
-          std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-          ok = runtime->controller.sendPluginState(
-              static_cast<uint32_t>(hostIndex), blob);
-        }
-        DAW_EVENT("project.state_restored")
-            .field("track", source.trackId)
-            .field("device", savedIds[hostIndex])
-            .field("bytes", static_cast<uint64_t>(blob.size()))
-            .field("host_ready", hostRunning)
-            .field("ok", ok);
+// Returns the sentinel below when no track holds it, which cannot happen for a device that came
+// out of a track's own chain; the rewrite is refused rather than guessed if it ever does.
+constexpr uint32_t kNoOwnerTrack = 0xFFFFFFFFu;
+
+uint32_t ownerTrackOfDevice(const daw::ProjectDocument& document, uint32_t deviceId) {
+  for (const auto& track : document.tracks) {
+    for (const auto& device : track.chain.devices) {
+      if (device.id == deviceId) {
+        return track.trackId;
       }
     }
+  }
+  return kNoOwnerTrack;
+}
+
+// READ A LISTED FILE AND PROVE IT IS THE ONE THE DOCUMENT MEANT. Size AND digest, because a size
+// check alone passes any same-length corruption and a digest alone would read an arbitrarily large
+// file before noticing.
+bool readArtifactVerified(const std::filesystem::path& path, const daw::ArtifactEntry& entry,
+                          std::vector<uint8_t>& out, std::string* error) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(path, ec)) {
+    setLoadError(error, "artifact " + entry.leafName + " is missing or not a regular file");
+    return false;
+  }
+  // SIZE BEFORE BYTES, so the reason above is true of the code. Asking the filesystem first is
+  // what makes a wrong-length file cheap to refuse; reading it and then measuring would pull an
+  // arbitrarily large file into memory to learn what one stat call already knew.
+  const auto onDiskSize = std::filesystem::file_size(path, ec);
+  if (ec) {
+    setLoadError(error, "cannot size artifact " + entry.leafName);
+    return false;
+  }
+  if (onDiskSize != entry.size) {
+    setLoadError(error, "artifact " + entry.leafName + " is " + std::to_string(onDiskSize) +
+                            " bytes, the inventory says " + std::to_string(entry.size));
+    return false;
+  }
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    setLoadError(error, "cannot read artifact " + entry.leafName);
+    return false;
+  }
+  out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  if (out.size() != entry.size) {
+    // The file changed size between the stat and the read. Refusing rather than trusting either
+    // number: something else is writing into a generation directory, which is never legal.
+    setLoadError(error, "artifact " + entry.leafName + " changed size while being read");
+    return false;
+  }
+  if (daw::sha256Hex(out) != entry.sha256) {
+    setLoadError(error, "artifact " + entry.leafName + " does not match its recorded digest");
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+// VERIFY EVERY LISTED ARTIFACT BEFORE ANYTHING IS PUBLISHED, and hold the bytes.
+//
+// AE-P1.2 G2-B item 18, `present_file_rules`: a non-regular or unreadable path, an empty blob,
+// malformed manifest JSON, or a manifest whose embedded track/device differs from the expected
+// source key "fails load BEFORE document or ExecutionSnapshot publication".
+//
+// The first version of this ran after applyDocument, which is not a dry run: it rebuilds every
+// chain, relaunches hosts and publishes track, chain, routing, mod, clip and audio-clip snapshots.
+// Failing after that left the session half-replaced — new tracks live, old loop range, old undo
+// history — which is a worse outcome than either loading or refusing. So verification is a
+// separate pass that touches nothing, and the bytes it proves are carried forward rather than read
+// a second time.
+//
+// It runs on the UNGUTTED document, which matters: applyDocument lifts the master track and every
+// aux child out of `document.tracks`, so a pass that walked tracks afterwards could not see a
+// stem's devices at all.
+struct VerifiedArtifact {
+  daw::ArtifactSource source = daw::ArtifactSource::Schema6Generation;
+  std::vector<uint8_t> bytes;
+};
+using VerifiedArtifacts = std::map<std::pair<uint32_t, daw::ArtifactKind>, VerifiedArtifact>;
+
+namespace {
+
+bool readWholeFile(const std::filesystem::path& path, std::vector<uint8_t>& out) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return false;
+  }
+  out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  return true;
+}
+
+// READ ONE SIDE OF A LEGACY PAIR, distinguishing ABSENT from BROKEN.
+//
+// `present_file_rules` lists four ways a present file fails the load: "an existing NON-REGULAR or
+// UNREADABLE path, an EMPTY BLOB, MALFORMED MANIFEST JSON, or manifest whose embedded track/device
+// differs from the expected source key (LegacyArtifactKey for schema 1-5, indexed global key for
+// schema 6)". Only the fourth is specific to manifests, and its parenthetical is the one that says
+// the legacy side compares too.
+//
+// The schema-6 side got all of them through readArtifactVerified from the start. The legacy side
+// got one: it asked `is_regular_file() && readWholeFile()` and treated every other answer as "no
+// file". So a directory at `.state/t0_d1.bin`, or a file with no read permission, loaded the
+// project with the plugin at factory defaults, reported nothing, and let the next save write an
+// inventory with no blob entry — the silent drop this record exists to remove, arriving through
+// the one branch that had not been given the rule.
+//
+// Returns false with `error` set when the path is present and broken. Returns true with `bytes`
+// EMPTY when there is genuinely no file, which is ExplicitAbsent and a legal row of the matrix.
+bool readLegacySide(const std::filesystem::path& path, std::vector<uint8_t>& bytes,
+                    std::string* error) {
+  bytes.clear();
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) {
+    return true;  // absent, not broken
+  }
+  if (!std::filesystem::is_regular_file(path, ec)) {
+    setLoadError(error, path.string() + " exists and is not a regular file");
+    return false;
+  }
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    setLoadError(error, "cannot read " + path.string());
+    return false;
+  }
+  bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  if (bytes.empty()) {
+    // AN EMPTY FILE IS A FAILURE, NOT AN ABSENCE. `present_file_rules` names the empty blob; a
+    // manifest holding nothing is not JSON, which the same sentence names as malformed. Absence is
+    // expressed by there being no file at all, never by a zero-length one.
+    setLoadError(error, path.string() + " exists and holds nothing");
+    return false;
+  }
+  return true;
+}
+
+// The same rule for a side whose bytes are already in hand (the schema-6 branch, which reads
+// through readArtifactVerified).
+bool refuseEmpty(const std::vector<uint8_t>& bytes, const std::string& what, std::string* error) {
+  if (bytes.empty()) {
+    setLoadError(error, what + " exists and holds nothing");
+    return false;
+  }
+  return true;
+}
+
+bool verifyDocumentArtifacts(const daw::ProjectDocument& document, const std::string& path,
+                             const daw::DeviceIdMigration& migration, VerifiedArtifacts& out,
+                             std::string* error) {
+  const std::filesystem::path stateDir = daw::pluginStateDirFor(path);
+  const std::filesystem::path generationDir =
+      daw::artifactGenerationDir(stateDir.string(), document.artifactGeneration);
+
+  // SCHEMA 6: only what the inventory lists, under the generation the document names.
+  for (const auto& entry : document.artifactEntries) {
+    std::vector<uint8_t> bytes;
+    if (!readArtifactVerified(generationDir / entry.leafName, entry, bytes, error)) {
+      DAW_EVENT("artifact.verify_failed")
+          .field("track", entry.trackId)
+          .field("device", entry.globalDeviceId)
+          .field("kind", daw::artifactKindToString(entry.kind))
+          .field("leaf", entry.leafName);
+      return false;
+    }
+    if (!refuseEmpty(bytes, "artifact " + entry.leafName, error)) {
+      return false;
+    }
+    if (entry.kind == daw::ArtifactKind::ParameterManifest) {
+      // THE EMBEDDED KEY MUST AGREE WITH THE ENTRY POINTING AT IT. A manifest that names a
+      // different device is either a stale file that survived a rename or an entry that was
+      // pointed at the wrong leaf, and both are exactly the mis-addressing this record removes.
+      uint32_t embeddedTrack = 0;
+      uint32_t embeddedDevice = 0;
+      if (!daw::engine::manifestEmbeddedKey(bytes, embeddedTrack, embeddedDevice)) {
+        setLoadError(error, "artifact " + entry.leafName + " is not a parameter manifest");
+        return false;
+      }
+      if (embeddedTrack != entry.trackId || embeddedDevice != entry.globalDeviceId) {
+        setLoadError(error, "artifact " + entry.leafName + " names track " +
+                                std::to_string(embeddedTrack) + " device " +
+                                std::to_string(embeddedDevice) + ", the inventory says track " +
+                                std::to_string(entry.trackId) + " device " +
+                                std::to_string(entry.globalDeviceId));
+        return false;
+      }
+    }
+    out[{entry.globalDeviceId, entry.kind}] =
+        VerifiedArtifact{daw::ArtifactSource::Schema6Generation, std::move(bytes)};
+  }
+
+  // SCHEMA 1-5: the retained old key, and only it. `legacy_precedence` — "when the old and newly
+  // allocated filenames differ, the importer never probes the new path, so a pre-existing
+  // canonical-looking file has no provenance and cannot enter the inventory."
+  for (const auto& [deviceId, key] : migration.legacyArtifactKeys) {
+    // WHO OWNS THIS DEVICE NOW. Needed by both sides: the blob to say whose file failed, the
+    // manifest to know what pair to rewrite to.
+    const uint32_t ownerTrack = ownerTrackOfDevice(document, deviceId);
+
+    if (out.count({deviceId, daw::ArtifactKind::StateBlob}) == 0) {
+      const auto blobPath = stateDir / daw::legacyArtifactLeafName(key, daw::ArtifactKind::StateBlob);
+      std::vector<uint8_t> blob;
+      if (readLegacySide(blobPath, blob, error)) {
+        if (!blob.empty()) {
+          out[{deviceId, daw::ArtifactKind::StateBlob}] =
+              VerifiedArtifact{daw::ArtifactSource::LegacyOldKey, std::move(blob)};
+        }
+      } else {
+        return false;
+      }
+    }
+    if (out.count({deviceId, daw::ArtifactKind::ParameterManifest}) != 0) {
+      continue;
+    }
+    const auto manifestPath =
+        stateDir / daw::legacyArtifactLeafName(key, daw::ArtifactKind::ParameterManifest);
+    std::vector<uint8_t> manifest;
+    if (!readLegacySide(manifestPath, manifest, error)) {
+      return false;
+    }
+    if (manifest.empty()) {
+      continue;  // no file: ExplicitAbsent, which is a legal row of the presence matrix
+    }
+    // THE EMBEDDED PAIR IS COMPARED TO THE KEY BEFORE IT IS REWRITTEN, and the order is the whole
+    // point. `present_file_rules`, quoted with the half that names this case:
+    //
+    //   "malformed manifest JSON, or manifest whose embedded track/device differs from the
+    //    expected source key (LegacyArtifactKey for schema 1-5, indexed global key for schema 6)
+    //    FAILS LOAD before document or ExecutionSnapshot publication"
+    //
+    // The first version of this rewrote unconditionally. That LAUNDERS the exact defect the clause
+    // names: a `t0_d1.params.json` whose body said track 3 device 9 — copied in from another
+    // project, or left by a rename — was silently restamped to (0,1), retained, and republished
+    // with a matching digest, after which every later load verifies it as correct. Detection is
+    // only possible here, once, while the file still disagrees with its own name.
+    uint32_t embeddedTrack = 0;
+    uint32_t embeddedDevice = 0;
+    if (!daw::engine::manifestEmbeddedKey(manifest, embeddedTrack, embeddedDevice)) {
+      setLoadError(error, "parameter manifest at " + manifestPath.string() +
+                              " is not a parameter manifest this engine wrote");
+      return false;
+    }
+    if (embeddedTrack != key.trackId || embeddedDevice != key.oldDeviceId) {
+      setLoadError(error, "parameter manifest at " + manifestPath.string() + " names track " +
+                              std::to_string(embeddedTrack) + " device " +
+                              std::to_string(embeddedDevice) + ", but its own filename says track " +
+                              std::to_string(key.trackId) + " device " +
+                              std::to_string(key.oldDeviceId));
+      return false;
+    }
+    if (ownerTrack == kNoOwnerTrack) {
+      setLoadError(error, "parameter manifest at " + manifestPath.string() +
+                              " belongs to a device no track holds");
+      return false;
+    }
+    // AND ONLY THEN REWRITTEN, which `legacy_import` requires outright: "rewrite manifest embedded
+    // ids in memory". The file names the pair this device was SAVED under; the migration may have
+    // renumbered it, and republishing the old pair would write a manifest the very next load
+    // refuses.
+    if (!daw::engine::rewriteManifestEmbeddedKey(manifest, ownerTrack, deviceId)) {
+      setLoadError(error, "parameter manifest at " + manifestPath.string() +
+                              " could not be restamped to track " + std::to_string(ownerTrack) +
+                              " device " + std::to_string(deviceId));
+      return false;
+    }
+    out[{deviceId, daw::ArtifactKind::ParameterManifest}] =
+        VerifiedArtifact{daw::ArtifactSource::LegacyOldKey, std::move(manifest)};
+  }
+  return true;
+}
+
+}  // namespace
+
+// ADOPT WHAT WAS VERIFIED, THEN PUSH THE BLOBS — a FILE-OPEN action, and only that.
+//
+// This lived inside applyDocument until undo started calling that function. Plugin state is NOT in
+// ProjectDocument (Device has no params field), so undo was not restoring anything here — it was
+// OVERWRITING LIVE STATE WITH LAST-SAVED STATE. Tweak a cutoff, do not save, type a note, press
+// Ctrl-Z: the note came back AND the plugin snapped to whatever was on disk. Review finding #123
+// item 6.
+//
+// THE STORE IS REPLACED, NOT UPDATED. Device ids are project-global, not engine-global, so project
+// A's device 1 and project B's device 1 are the same key — and the old shape only evicted an entry
+// when the walk below actually reached that device. It does not reach a track whose live chain
+// diverged from the saved one, or one that is no longer in the table, and applyDocument has by now
+// lifted every aux child out of `document.tracks` entirely. Any of those left A's bytes under a
+// key B would later republish as its own. Clearing and repopulating from the VERIFIED SET makes
+// the store a function of the document that was just loaded, rather than of which tracks the walk
+// happened to visit.
+static void adoptVerifiedArtifacts(LoadProjectDeps& deps, const VerifiedArtifacts& verified) {
+  deps.engineState.artifactStore.clear();
+  for (const auto& [key, artifact] : verified) {
+    deps.engineState.artifactStore.retain(key.first, key.second, artifact.source, artifact.bytes);
+  }
+}
+
+// Push the verified blobs into the hosts that are up. BEST EFFORT BY CONSTRUCTION: everything that
+// could refuse the project has already refused it, and a host that is mid-relaunch is a timing
+// fact about this moment rather than a defect in the document.
+static void pushVerifiedBlobs(LoadProjectDeps& deps, const daw::ProjectDocument& document,
+                              const VerifiedArtifacts& verified) {
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
+  for (const auto& source : document.tracks) {
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, source.trackId);
+    if (!runtime) {
+      continue;
+    }
+    std::vector<daw::Device> liveDevices;
+    {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      liveDevices = runtime->track.chain.devices;
+    }
+    auto vstIds = [](const std::vector<daw::Device>& devices) {
+      std::vector<uint32_t> ids;
+      for (const auto& device : devices) {
+        if (device.kind == daw::DeviceKind::VstInstrument ||
+            device.kind == daw::DeviceKind::VstEffect) {
+          ids.push_back(device.id);
+        }
+      }
+      return ids;
+    };
+    const auto savedIds = vstIds(source.chain.devices);
+    const auto liveIds = vstIds(liveDevices);
+    if (savedIds != liveIds) {
+      // REPORTED, NOT PUSHED. The live chain is not the saved one, so slot N here is not slot N
+      // there and a push would land in the wrong plugin.
+      //
+      // WHAT HAPPENS TO THE BYTES, stated accurately. They stay in the store, but the next save
+      // will not republish them: captureDocument reads the LIVE chain, so a device that is not in
+      // it never reaches document.tracks, and the artifact walk is driven by document.tracks. The
+      // plugin state of a diverged track is therefore dropped from the next inventory — announced
+      // by this event and by nothing else. An earlier version of this comment claimed the opposite;
+      // it was wrong, and the claim mattered because it was the justification offered for clearing
+      // the store.
+      //
+      // This branch is also believed UNREACHABLE today: engine_load_track.cpp installs
+      // `runtime->track.chain = source.chain` verbatim, so savedIds == liveIds for every track
+      // applyDocument reached. It is kept because "believed unreachable" is not "cannot happen",
+      // and the event is what would tell us otherwise.
+      DAW_EVENT("project.state_chain_mismatch")
+          .field("track", source.trackId)
+          .field("saved_plugins", static_cast<uint64_t>(savedIds.size()))
+          .field("live_plugins", static_cast<uint64_t>(liveIds.size()));
+      continue;
+    }
+    for (size_t hostIndex = 0; hostIndex < savedIds.size(); ++hostIndex) {
+      const auto found = verified.find({savedIds[hostIndex], daw::ArtifactKind::StateBlob});
+      if (found == verified.end()) {
+        continue;
+      }
+      if (found->second.source == daw::ArtifactSource::LegacyOldKey) {
+        DAW_EVENT("project.state_restored_from_legacy_key")
+            .field("track", source.trackId)
+            .field("device", savedIds[hostIndex]);
+      }
+      // THE HOST MUST BE READY. On the common path it is — setupTrackRuntime launches
+      // synchronously and rebuildHostForChain keeps it up — but when the chain reconcile FAILS it
+      // sets hostReady=false plus needsRestart and returns, the restart worker relaunches on
+      // another thread, and this runs immediately after on the load thread. `ok` would then be
+      // true for a push into a host about to be SIGKILLed, because clearing readiness does not
+      // close the socket.
+      const bool hostRunning = runtime->hostReady.load(std::memory_order_acquire);
+      bool ok = false;
+      if (hostRunning) {
+        std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+        ok = runtime->controller.sendPluginState(static_cast<uint32_t>(hostIndex),
+                                                 found->second.bytes);
+      }
+      DAW_EVENT("project.state_restored")
+          .field("track", source.trackId)
+          .field("device", savedIds[hostIndex])
+          .field("bytes", static_cast<uint64_t>(found->second.bytes.size()))
+          .field("host_ready", hostRunning)
+          .field("ok", ok);
+    }
+  }
 }
 
 bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
@@ -803,12 +1087,25 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   if (!daw::loadProject(document, path, error, &migration)) {
     return false;
   }
+  // EVERY LISTED ARTIFACT IS PROVEN FIRST, while refusing still costs nothing.
+  //
+  // `present_file_rules` requires a document whose files do not match its inventory to be refused
+  // "before document or ExecutionSnapshot publication". applyDocument IS that publication — it
+  // relaunches hosts and publishes six snapshots — so the verification cannot come after it. The
+  // bytes proved here are carried into the two steps below rather than read again, so nothing can
+  // change between proving a file and using it.
+  VerifiedArtifacts verified;
+  if (!verifyDocumentArtifacts(document, path, migration, verified, error)) {
+    return false;
+  }
+
   if (!applyDocument(deps, document, path, error)) { return false; }
 
   // OPENING A FILE pushes its saved plugin blobs into the hosts. Undo must not: the blobs are not
   // in the document, so re-pushing them reverts unsaved plugin edits rather than restoring
-  // anything. See restorePluginStateFromDisk.
-  restorePluginStateFromDisk(deps, document, path, migration);
+  // anything.
+  adoptVerifiedArtifacts(deps, verified);
+  pushVerifiedBlobs(deps, document, verified);
 
   // A LOAD REPLACES THE SONG, so any hand-set loop belonged to the OLD one — and this is the only
   // place that is true. It used to live inside applyDocument, which was correct until UNDO started
@@ -842,7 +1139,7 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   // to by definition. Found by the review panel, ranked first of eleven.
   {
     daw::ProjectDocument seeded = deps.captureDocument ? deps.captureDocument() : document;
-    // AND THE PLUGINS THE FILE JUST RESTORED. restorePluginStateFromDisk ran above, so the hosts
+    // AND THE PLUGINS THE FILE JUST RESTORED. pushVerifiedBlobs ran above, so the hosts
     // now hold the saved blobs — reading them here is what makes "undo back to the state I
     // opened" return the plugins too, not only the notes. A full read rather than a dirty-flag
     // one: there is no previous snapshot to carry anything forward from.

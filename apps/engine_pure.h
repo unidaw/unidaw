@@ -57,18 +57,20 @@ std::string errorScopeName(const char* family, uint16_t code);
 // before/after pairs; every other type maps to its opposite.
 daw::UndoEntry invertUndoEntry(const daw::UndoEntry& entry);
 
-// Blob and manifest filenames for one (track, device). The DIRECTORY rule deliberately does not
-// live here — it is daw::pluginStateDirFor in project_file.cpp, because saveProjectModule needs it
-// too: a lambda in the engine could be seen by the save that writes the blobs and the load that
-// restores them, and NOT by the packer that has to find them, which is exactly why a `.uni`
-// carried every sample and no plugin state at all.
-std::string pluginStateFileName(uint32_t trackId, uint32_t deviceId);
-
-// The PARAMETER MANIFEST beside the opaque blob. The blob is the plugin's private state and says
-// nothing to anyone but the plugin; this says what the knobs WERE, in a form readable without the
-// plugin installed and without the engine running. Its own file rather than a field in
-// project.json, because it is DERIVED from the plugin rather than authored.
-std::string pluginParamsFileName(uint32_t trackId, uint32_t deviceId);
+// pluginStateFileName / pluginParamsFileName WERE HERE, and they are gone deliberately.
+//
+// They took `(uint32_t trackId, uint32_t deviceId)` and forwarded to daw::artifactLeafName. Under
+// AE-P1.2 G2-B item 18 there are exactly two legal reasons to name an artifact file, and neither
+// wants that signature:
+//
+//   an inventory entry's leaf   -> daw::artifactLeafName(...), inside apps/artifact_inventory.*,
+//                                  used to BUILD an entry and always joined to the generation dir
+//   a schema 1-5 flat path      -> daw::legacyArtifactLeafName(key, kind), which cannot be called
+//                                  without a LegacyArtifactKey
+//
+// A helper that accepts two loose integers accepts the device's CURRENT id, which is precisely the
+// probe `legacy_precedence` forbids — and a grep guarding it was defeated three ways in review.
+// Removing the spelling was cheaper and stronger than watching for its misuse.
 
 // The tick just past the last event in a clip — its content extent. Notes and chords contribute
 // their duration; everything else contributes only its offset.
