@@ -534,13 +534,9 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
           if (captureOk && !captured.empty()) {
             deps.engineState.artifactStore.retain(device.id, kind,
                                                   daw::ArtifactSource::LiveCapture, captured);
-            daw::ArtifactEntry entry;
-            entry.trackId = runtime->trackId;
-            entry.globalDeviceId = device.id;
-            entry.kind = kind;
-            entry.leafName = daw::artifactLeafName(runtime->trackId, device.id, kind);
-            entry.size = captured.size();
-            entry.sha256 = daw::sha256Hex(captured);
+            // FROM THE BYTES, so the leaf, the size and the digest cannot disagree with the
+            // identity beside them. Six fields set by hand is how they came to.
+            auto entry = daw::ArtifactEntry::forBytes(runtime->trackId, device.id, kind, captured);
             files.push_back({std::move(entry), std::move(captured)});
             return;
           }
@@ -578,13 +574,8 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
                   .field("retained_from", daw::artifactSourceToString(retained.source));
               return;
             }
-            daw::ArtifactEntry entry;
-            entry.trackId = runtime->trackId;
-            entry.globalDeviceId = device.id;
-            entry.kind = kind;
-            entry.leafName = daw::artifactLeafName(runtime->trackId, device.id, kind);
-            entry.size = retained.bytes.size();
-            entry.sha256 = daw::sha256Hex(retained.bytes);
+            auto entry =
+                daw::ArtifactEntry::forBytes(runtime->trackId, device.id, kind, retained.bytes);
             files.push_back({std::move(entry), retained.bytes});
             return;
           }

@@ -416,7 +416,7 @@ int main(int argc, char** argv) {
   auto masterTrack = std::make_unique<TrackRuntime>();
   masterTrack->trackId = daw::kMasterTrackId;
   masterTrack->trackName = "Master";
-  masterTrack->trackSnapshot = buildTrackSnapshot(masterTrack->track);  // pre-publication
+  masterTrack->trackSnapshot.assignBeforePublication(buildTrackSnapshot(masterTrack->track));  // pre-publication
   // 4b groundwork: give the master a host-capable config so a VST effect on the master
   // SUM can be hosted out of process. Its input IS the sum, so numChannelsIn ==
   // numChannelsOut (an audio-in effects chain). Dedicated socket/shm names off the
@@ -1102,7 +1102,7 @@ int main(int argc, char** argv) {
       return nullptr;
     }
     runtime->track.chain = daw::TrackChain{};  // no plugins; pre-publication (AE-P1.4)
-    runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
+    runtime->trackSnapshot.assignBeforePublication(buildTrackSnapshot(runtime->track));
     runtime->trackName = name;
     runtime->parentId.store(parentTrackId, std::memory_order_relaxed);
     runtime->collapsed.store(false, std::memory_order_relaxed);

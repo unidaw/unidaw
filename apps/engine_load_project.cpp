@@ -406,8 +406,7 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
           std::lock_guard<std::mutex> tlock(runtime->trackMutex);
           snap = buildTrackSnapshot(runtime->track);
         }
-        std::atomic_store_explicit(&runtime->trackSnapshot, snap,
-                                   std::memory_order_release);
+        runtime->trackSnapshot.publish(snap);
         // Publish the loaded rack (chain / routing / mod links) so a UI attached
         // to the running engine — or a sidecar that started after it — sees it
         // without waiting for an edit. These diffs are otherwise emit-on-change
@@ -518,8 +517,7 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
             haveMaster ? masterSource.modLinks : std::vector<daw::ModLink>{};
         snap = buildTrackSnapshot(masterTrack->track);
       }
-      std::atomic_store_explicit(&masterTrack->trackSnapshot, snap,
-                                 std::memory_order_release);
+      masterTrack->trackSnapshot.publish(snap);
       const double gainDb = haveMaster ? masterSource.mixer.gainDb : 0.0;
       masterTrack->mixGainLinear.store(
           static_cast<float>(std::pow(10.0, gainDb / 20.0)),
@@ -722,7 +720,7 @@ bool readArtifactVerified(const std::filesystem::path& path, const daw::Artifact
                           std::vector<uint8_t>& out, std::string* error) {
   std::error_code ec;
   if (!std::filesystem::is_regular_file(path, ec)) {
-    setLoadError(error, "artifact " + entry.leafName + " is missing or not a regular file");
+    setLoadError(error, "artifact " + entry.leafName() + " is missing or not a regular file");
     return false;
   }
   // SIZE BEFORE BYTES, so the reason above is true of the code. Asking the filesystem first is
@@ -730,28 +728,28 @@ bool readArtifactVerified(const std::filesystem::path& path, const daw::Artifact
   // arbitrarily large file into memory to learn what one stat call already knew.
   const auto onDiskSize = std::filesystem::file_size(path, ec);
   if (ec) {
-    setLoadError(error, "cannot size artifact " + entry.leafName);
+    setLoadError(error, "cannot size artifact " + entry.leafName());
     return false;
   }
-  if (onDiskSize != entry.size) {
-    setLoadError(error, "artifact " + entry.leafName + " is " + std::to_string(onDiskSize) +
-                            " bytes, the inventory says " + std::to_string(entry.size));
+  if (onDiskSize != entry.size()) {
+    setLoadError(error, "artifact " + entry.leafName() + " is " + std::to_string(onDiskSize) +
+                            " bytes, the inventory says " + std::to_string(entry.size()));
     return false;
   }
   std::ifstream in(path, std::ios::binary);
   if (!in) {
-    setLoadError(error, "cannot read artifact " + entry.leafName);
+    setLoadError(error, "cannot read artifact " + entry.leafName());
     return false;
   }
   out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-  if (out.size() != entry.size) {
+  if (out.size() != entry.size()) {
     // The file changed size between the stat and the read. Refusing rather than trusting either
     // number: something else is writing into a generation directory, which is never legal.
-    setLoadError(error, "artifact " + entry.leafName + " changed size while being read");
+    setLoadError(error, "artifact " + entry.leafName() + " changed size while being read");
     return false;
   }
-  if (daw::sha256Hex(out) != entry.sha256) {
-    setLoadError(error, "artifact " + entry.leafName + " does not match its recorded digest");
+  if (daw::sha256Hex(out) != entry.sha256()) {
+    setLoadError(error, "artifact " + entry.leafName() + " does not match its recorded digest");
     return false;
   }
   return true;
@@ -856,37 +854,37 @@ bool verifyDocumentArtifacts(const daw::ProjectDocument& document, const std::st
   // SCHEMA 6: only what the inventory lists, under the generation the document names.
   for (const auto& entry : document.artifactEntries) {
     std::vector<uint8_t> bytes;
-    if (!readArtifactVerified(generationDir / entry.leafName, entry, bytes, error)) {
+    if (!readArtifactVerified(generationDir / entry.leafName(), entry, bytes, error)) {
       DAW_EVENT("artifact.verify_failed")
-          .field("track", entry.trackId)
-          .field("device", entry.globalDeviceId)
-          .field("kind", daw::artifactKindToString(entry.kind))
-          .field("leaf", entry.leafName);
+          .field("track", entry.trackId())
+          .field("device", entry.globalDeviceId())
+          .field("kind", daw::artifactKindToString(entry.kind()))
+          .field("leaf", entry.leafName());
       return false;
     }
-    if (!refuseEmpty(bytes, "artifact " + entry.leafName, error)) {
+    if (!refuseEmpty(bytes, "artifact " + entry.leafName(), error)) {
       return false;
     }
-    if (entry.kind == daw::ArtifactKind::ParameterManifest) {
+    if (entry.kind() == daw::ArtifactKind::ParameterManifest) {
       // THE EMBEDDED KEY MUST AGREE WITH THE ENTRY POINTING AT IT. A manifest that names a
       // different device is either a stale file that survived a rename or an entry that was
       // pointed at the wrong leaf, and both are exactly the mis-addressing this record removes.
       uint32_t embeddedTrack = 0;
       uint32_t embeddedDevice = 0;
       if (!daw::engine::manifestEmbeddedKey(bytes, embeddedTrack, embeddedDevice)) {
-        setLoadError(error, "artifact " + entry.leafName + " is not a parameter manifest");
+        setLoadError(error, "artifact " + entry.leafName() + " is not a parameter manifest");
         return false;
       }
-      if (embeddedTrack != entry.trackId || embeddedDevice != entry.globalDeviceId) {
-        setLoadError(error, "artifact " + entry.leafName + " names track " +
+      if (embeddedTrack != entry.trackId() || embeddedDevice != entry.globalDeviceId()) {
+        setLoadError(error, "artifact " + entry.leafName() + " names track " +
                                 std::to_string(embeddedTrack) + " device " +
                                 std::to_string(embeddedDevice) + ", the inventory says track " +
-                                std::to_string(entry.trackId) + " device " +
-                                std::to_string(entry.globalDeviceId));
+                                std::to_string(entry.trackId()) + " device " +
+                                std::to_string(entry.globalDeviceId()));
         return false;
       }
     }
-    out[{entry.globalDeviceId, entry.kind}] =
+    out[{entry.globalDeviceId(), entry.kind()}] =
         VerifiedArtifact{daw::ArtifactSource::Schema6Generation, std::move(bytes)};
   }
 

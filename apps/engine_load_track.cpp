@@ -136,8 +136,7 @@ void loadTrackFromDocument(LoadProjectDeps& deps,
           std::lock_guard<std::mutex> tlock(runtime->trackMutex);
           snap = buildTrackSnapshot(runtime->track);
         }
-        std::atomic_store_explicit(&runtime->trackSnapshot, snap,
-                                   std::memory_order_release);
+        runtime->trackSnapshot.publish(snap);
       }
       // Spawn or reconcile the host for the restored chain. Idempotent when the
       // live chain already matches (reopen-same-session): equal plugin paths are

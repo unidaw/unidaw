@@ -452,6 +452,47 @@ target_link_libraries(automation_target_tests PRIVATE platform_juce)
 add_executable(sha256_tests apps/sha256_tests_main.cpp apps/sha256.cpp)
 target_include_directories(sha256_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# THE SESSION EXECUTION SNAPSHOT'S identity and validation rules. -Werror=switch for the same
+# reason routing_graph_tests carries it: every dispatch over SlotOccupancy and SnapshotErrorCode is
+# a switch, and a new enumerator must break the build rather than fall through.
+add_executable(execution_snapshot_tests
+  apps/execution_snapshot_tests_main.cpp
+  apps/execution_snapshot.cpp
+  apps/routing_graph.cpp
+  apps/automation_target.cpp
+  apps/device_chain.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+  apps/patcher_preset.cpp
+  apps/plugin_cache.cpp
+  apps/event_log.cpp
+)
+target_include_directories(execution_snapshot_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_compile_options(execution_snapshot_tests PRIVATE -Werror=switch -Werror=unused-variable)
+
+# THE PUBLICATION TRANSACTION: compile, validate, publish, or change nothing. Threads, so the
+# concurrent-reader test needs the same warning gate as the rest.
+add_executable(engine_snapshot_store_tests
+  apps/engine_snapshot_store_tests_main.cpp
+  apps/execution_snapshot.cpp
+  apps/routing_graph.cpp
+  apps/automation_target.cpp
+  apps/device_chain.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+  apps/patcher_preset.cpp
+  apps/plugin_cache.cpp
+  apps/event_log.cpp
+)
+target_include_directories(engine_snapshot_store_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_compile_options(engine_snapshot_store_tests PRIVATE -Werror=switch -Werror=unused-variable)
+
 # THE 20-ROW ROUTING MATRIX, iterated from the frozen packet rather than restated in C++.
 # apps/routing_matrix_generated.h is emitted by tools/architecture/ae_p1_2_g2b_impl_steps_check.py
 # and byte-compared against the packet whenever its pins resolve, so this fixture and the contract
@@ -1907,6 +1948,17 @@ add_test(NAME impl_step_map
   COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/architecture/ae_p1_2_g2b_impl_steps_check.py
 )
 set_tests_properties(impl_step_map PROPERTIES TIMEOUT 120)
+# P-SNAPSHOT-PUBLISHERS, measured rather than recited. Twenty-four independent publications of
+# overlapping state are the reason R-HOST-PLAN-AUTHORITY exists, and step 4 moves authority away
+# from them — so the population has to be measured on every run, not asserted once in prose.
+add_test(NAME snapshot_publishers
+  COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/architecture/snapshot_publisher_inventory.py
+)
+set_tests_properties(snapshot_publishers PROPERTIES TIMEOUT 120)
+add_test(NAME snapshot_store COMMAND engine_snapshot_store_tests)
+set_tests_properties(snapshot_store PROPERTIES TIMEOUT 300)
+add_test(NAME execution_snapshot COMMAND execution_snapshot_tests)
+set_tests_properties(execution_snapshot PROPERTIES TIMEOUT 120)
 add_test(NAME routing_matrix COMMAND routing_graph_tests)
 set_tests_properties(routing_matrix PROPERTIES TIMEOUT 120)
 # The control that would have caught the laundering: a legacy manifest whose embedded pair does

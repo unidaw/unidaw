@@ -362,8 +362,7 @@ void produceBlock(ProducerBlockDeps& deps,
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
           return;
         }
-        auto trackStatePtr = std::atomic_load_explicit(&runtime->trackSnapshot,
-                                                       std::memory_order_acquire);
+        auto trackStatePtr = runtime->trackSnapshot.load();
         const auto& trackState = trackStatePtr ? *trackStatePtr : kEmptyTrackState;
         // Did another track route audio into this one this block? Read where the inbound
         // buffer is swapped in, used where the sampler decides whether to overwrite it.
@@ -631,8 +630,7 @@ void produceBlock(ProducerBlockDeps& deps,
             if (child->auxBusIndex.load(std::memory_order_relaxed) > 15u) {
               continue;
             }
-            auto childStatePtr = std::atomic_load_explicit(
-                &child->trackSnapshot, std::memory_order_acquire);
+            auto childStatePtr = child->trackSnapshot.load();
             const auto& childState =
                 childStatePtr ? *childStatePtr : kEmptyTrackState;
             renderTrack(*child, childState, blockStartTicks, blockEndTicks,
@@ -1193,8 +1191,7 @@ void produceBlock(ProducerBlockDeps& deps,
       {
         std::vector<uint32_t> routeEndpoints;
         for (auto* runtime : trackSnapshot) {
-          auto tsPtr = std::atomic_load_explicit(&runtime->trackSnapshot,
-                                                 std::memory_order_acquire);
+          auto tsPtr = runtime->trackSnapshot.load();
           if (!tsPtr) {
             continue;
           }

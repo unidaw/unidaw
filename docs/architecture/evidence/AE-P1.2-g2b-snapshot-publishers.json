@@ -1,0 +1,129 @@
+{
+  "record": "P-SNAPSHOT-PUBLISHERS",
+  "total": 24,
+  "atomic_stores": [
+    {
+      "file": "apps/engine_arrangetime_commands.cpp",
+      "line": 380,
+      "text": "rt->trackSnapshot.publish(stateSnap);"
+    },
+    {
+      "file": "apps/engine_automation_commands.cpp",
+      "line": 110,
+      "text": "runtime->trackSnapshot.publish(snapshot);"
+    },
+    {
+      "file": "apps/engine_automation_commands.cpp",
+      "line": 317,
+      "text": "runtime->trackSnapshot.publish(snapshot);"
+    },
+    {
+      "file": "apps/engine_automation_commands.cpp",
+      "line": 412,
+      "text": "runtime->trackSnapshot.publish(snapshot);"
+    },
+    {
+      "file": "apps/engine_chain_commands.cpp",
+      "line": 192,
+      "text": "runtime->trackSnapshot.publish(snapshot);"
+    },
+    {
+      "file": "apps/engine_consumer.cpp",
+      "line": 611,
+      "text": "child->trackSnapshot.publish(buildTrackSnapshot(child->track));"
+    },
+    {
+      "file": "apps/engine_load_project.cpp",
+      "line": 409,
+      "text": "runtime->trackSnapshot.publish(snap);"
+    },
+    {
+      "file": "apps/engine_load_project.cpp",
+      "line": 520,
+      "text": "masterTrack->trackSnapshot.publish(snap);"
+    },
+    {
+      "file": "apps/engine_load_track.cpp",
+      "line": 139,
+      "text": "runtime->trackSnapshot.publish(snap);"
+    },
+    {
+      "file": "apps/engine_modlink_commands.cpp",
+      "line": 100,
+      "text": "runtime->trackSnapshot.publish(snapshot);"
+    },
+    {
+      "file": "apps/engine_modlink_commands.cpp",
+      "line": 230,
+      "text": "runtime->trackSnapshot.publish(snapshot);"
+    },
+    {
+      "file": "apps/engine_modlink_commands.cpp",
+      "line": 280,
+      "text": "runtime->trackSnapshot.publish(snapshot);"
+    },
+    {
+      "file": "apps/engine_patcher_commands.cpp",
+      "line": 201,
+      "text": "runtime->trackSnapshot.publish(buildTrackSnapshot(runtime->track));"
+    },
+    {
+      "file": "apps/engine_patcher_commands.cpp",
+      "line": 437,
+      "text": "runtime->trackSnapshot.publish(buildTrackSnapshot(runtime->track));"
+    },
+    {
+      "file": "apps/engine_song_store.cpp",
+      "line": 117,
+      "text": "runtime->trackSnapshot.publish(snap);"
+    },
+    {
+      "file": "apps/engine_track_commands.cpp",
+      "line": 95,
+      "text": "runtime->trackSnapshot.publish(snapshot);"
+    },
+    {
+      "file": "apps/engine_track_commands.cpp",
+      "line": 182,
+      "text": "runtime->trackSnapshot.publish(snapshot);"
+    },
+    {
+      "file": "apps/engine_track_commands.cpp",
+      "line": 234,
+      "text": "existing->trackSnapshot.publish(buildTrackSnapshot(existing->track));"
+    },
+    {
+      "file": "apps/engine_track_setup.cpp",
+      "line": 297,
+      "text": "rt->trackSnapshot.publish(buildTrackSnapshot(rt->track));"
+    },
+    {
+      "file": "apps/engine_trackprops_commands.cpp",
+      "line": 70,
+      "text": "runtime->trackSnapshot.publish(buildTrackSnapshot(runtime->track));"
+    },
+    {
+      "file": "apps/engine_trackprops_commands.cpp",
+      "line": 96,
+      "text": "runtime->trackSnapshot.publish(buildTrackSnapshot(runtime->track));"
+    }
+  ],
+  "prepublication_assignments": [
+    {
+      "file": "apps/daw_engine_main.cpp",
+      "line": 419,
+      "text": "masterTrack->trackSnapshot.assignBeforePublication(buildTrackSnapshot(masterTrack->track));  // pre-publication"
+    },
+    {
+      "file": "apps/daw_engine_main.cpp",
+      "line": 1105,
+      "text": "runtime->trackSnapshot.assignBeforePublication(buildTrackSnapshot(runtime->track));"
+    },
+    {
+      "file": "apps/engine_track_setup.cpp",
+      "line": 116,
+      "text": "runtime->trackSnapshot.assignBeforePublication(buildTrackSnapshot(runtime->track));"
+    }
+  ],
+  "publications_in_test_files": []
+}

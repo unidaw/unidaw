@@ -57,14 +57,11 @@ daw::ProjectDocument documentWithOneHostedDevice(uint32_t trackId, uint32_t devi
 
 daw::ArtifactEntry entryFor(uint32_t trackId, uint32_t deviceId, daw::ArtifactKind kind,
                             const std::string& bytes) {
-  daw::ArtifactEntry entry;
-  entry.trackId = trackId;
-  entry.globalDeviceId = deviceId;
-  entry.kind = kind;
-  entry.leafName = daw::artifactLeafName(trackId, deviceId, kind);
-  entry.size = bytes.size();
-  entry.sha256 = daw::sha256Hex(bytes);
-  return entry;
+  // THROUGH THE FACTORY, because there is no other way. This helper used to set the six fields by
+  // hand — which is exactly how a leaf name or a digest came to disagree with the identity beside
+  // it, and why validateArtifactInventory carried checks for both.
+  return daw::ArtifactEntry::forBytes(trackId, deviceId, kind,
+                                      std::vector<uint8_t>(bytes.begin(), bytes.end()));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -180,22 +177,12 @@ void validationRefusesEveryMalformedInventory() {
     d.artifactEntries.push_back(entryFor(0, 4, daw::ArtifactKind::StateBlob, "y"));
     refused(std::move(d), "two entries for one device and kind must be refused", true);
   }
-  {
-    // A leaf name that is not the canonical one.
-    daw::ProjectDocument d = documentWithOneHostedDevice(0, 4);
-    auto entry = entryFor(0, 4, daw::ArtifactKind::StateBlob, "x");
-    entry.leafName = "something_else.bin";
-    d.artifactEntries.push_back(entry);
-    refused(std::move(d), "a non-canonical leaf name must be refused", true);
-  }
-  {
-    // A digest that is not lowercase hex.
-    daw::ProjectDocument d = documentWithOneHostedDevice(0, 4);
-    auto entry = entryFor(0, 4, daw::ArtifactKind::StateBlob, "x");
-    entry.sha256 = "NOTHEX";
-    d.artifactEntries.push_back(entry);
-    refused(std::move(d), "a malformed digest must be refused", true);
-  }
+  // A NON-CANONICAL LEAF AND A MALFORMED DIGEST ARE NO LONGER REFUSED HERE, because they can no
+  // longer reach here. Both were fields a caller could set; both are now derived by
+  // ArtifactEntry::forBytes and checked by ArtifactEntry::fromDocument, which is the only way a
+  // document's values become an entry. The two cases moved to theFactoryRefusesWhatADocumentCanLie
+  // About below — at the boundary the untrusted bytes cross, rather than in a validator one layer
+  // in from it.
   {
     // A GENERATION THAT DOES NOT COMMIT ITS ENTRIES — the hand-edited document. NOT resealed,
     // because sealing is exactly what this case is missing.
@@ -337,6 +324,62 @@ void theManifestKeyIsReadableAndRewritable() {
           "a track number that does not fit the field");
 }
 
+// WHAT A DOCUMENT CAN LIE ABOUT, refused where it enters.
+//
+// `forBytes` cannot produce a wrong entry — it computes the leaf, the size and the digest. A
+// document supplies all three, so `fromDocument` is the one place any of them can be wrong, and the
+// only place worth checking.
+void theFactoryRefusesWhatADocumentCanLieAbout() {
+  const std::string bytes = "x";
+  const auto good = daw::ArtifactEntry::forBytes(0, 4, daw::ArtifactKind::StateBlob,
+                                                 std::vector<uint8_t>(bytes.begin(), bytes.end()));
+  expect(daw::ArtifactEntry::fromDocument(0, 4, daw::ArtifactKind::StateBlob, good.leafName(),
+                                          good.size(), good.sha256()).has_value(),
+         "a document repeating what forBytes computed is accepted");
+
+  expect(!daw::ArtifactEntry::fromDocument(0, 4, daw::ArtifactKind::StateBlob, "something_else.bin",
+                                           good.size(), good.sha256()).has_value(),
+         "a non-canonical leaf name is refused at the boundary");
+  expect(!daw::ArtifactEntry::fromDocument(0, 4, daw::ArtifactKind::StateBlob, good.leafName(),
+                                           good.size(), "NOTHEX").has_value(),
+         "and so is a digest that is not 64 lowercase hex characters");
+  expect(!daw::ArtifactEntry::fromDocument(0, 4, daw::ArtifactKind::StateBlob, good.leafName(),
+                                           good.size(),
+                                           "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789")
+              .has_value(),
+         "UPPERCASE hex is refused too — the canonical form is lowercase, and accepting both would "
+         "make two spellings of one digest compare unequal");
+  // THE LEAF IS CHECKED AGAINST THE IDENTITY IT IS GIVEN, not against itself: a leaf that is
+  // canonical for a DIFFERENT device is the mis-addressing this whole record removes.
+  expect(!daw::ArtifactEntry::fromDocument(0, 4, daw::ArtifactKind::StateBlob,
+                                           daw::artifactLeafName(0, 5, daw::ArtifactKind::StateBlob),
+                                           good.size(), good.sha256()).has_value(),
+         "a leaf canonical for another device is refused");
+  expect(!daw::ArtifactEntry::fromDocument(0, 4, daw::ArtifactKind::ParameterManifest,
+                                           good.leafName(), good.size(), good.sha256()).has_value(),
+         "and one canonical for the other KIND of the same device");
+}
+
+// EVERY FIELD IS DERIVED FROM WHAT IT WAS GIVEN, asserted directly — the factory is the one place
+// these are computed, so nothing else can check it.
+void forBytesDerivesEveryDerivedField() {
+  const std::string bytes = "hello";
+  const auto entry = daw::ArtifactEntry::forBytes(3, 12, daw::ArtifactKind::ParameterManifest,
+                                                  std::vector<uint8_t>(bytes.begin(), bytes.end()));
+  expect(entry.trackId() == 3 && entry.globalDeviceId() == 12 &&
+             entry.kind() == daw::ArtifactKind::ParameterManifest,
+         "the identity is what it was given");
+  expect(entry.leafName() == daw::artifactLeafName(3, 12, daw::ArtifactKind::ParameterManifest),
+         "the leaf name is the canonical one for that identity");
+  expect(entry.size() == bytes.size(), "the size is the length of the bytes");
+  expect(entry.sha256() == daw::sha256Hex(std::vector<uint8_t>(bytes.begin(), bytes.end())),
+         "and the digest is the digest of the bytes");
+  const auto other = daw::ArtifactEntry::forBytes(3, 12, daw::ArtifactKind::ParameterManifest,
+                                                  std::vector<uint8_t>{'h', 'e', 'l', 'l', 'o', '!'});
+  expect(other.sha256() != entry.sha256(), "different bytes give a different digest");
+  expect(other.leafName() == entry.leafName(), "while the leaf follows the identity, not the bytes");
+}
+
 // The leaf name has ONE definition, and the two engine helpers forward to it.
 void leafNamesAreCanonicalAndDistinct() {
   expect(daw::artifactLeafName(3, 12, daw::ArtifactKind::StateBlob) == "t3_d12.bin",
@@ -362,6 +405,8 @@ int main() {
   validationRefusesEveryMalformedInventory();
   aMigratedLegacyDocumentNamesNoArtifacts();
   theManifestKeyIsReadableAndRewritable();
+  theFactoryRefusesWhatADocumentCanLieAbout();
+  forBytesDerivesEveryDerivedField();
   leafNamesAreCanonicalAndDistinct();
 
   if (failures != 0) {

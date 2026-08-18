@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -61,17 +62,55 @@ bool artifactKindFromString(const std::string& text, ArtifactKind& out);
 // `trackId` is here even though `globalDeviceId` is unique project-wide, because the leaf name
 // contains both and the contract requires the entry to prove the track OWNS that device — an
 // entry naming the right device and the wrong track is a document disagreeing with itself.
-struct ArtifactEntry {
-  uint32_t trackId = 0;
-  uint32_t globalDeviceId = 0;
-  ArtifactKind kind = ArtifactKind::StateBlob;
-  std::string leafName;
-  uint64_t size = 0;
-  std::string sha256;  // lowercase hex, 64 chars
+// ONE ENTRY, AND IT CANNOT DISAGREE WITH ITSELF.
+//
+// `leafName`, `size` and `sha256` are DERIVED — from {trackId, globalDeviceId, kind} and from the
+// bytes. They were public fields, and three of validateArtifactInventory's eight checks existed
+// only to catch what a caller could then write into them: a non-canonical leaf, a digest that is
+// not 64 hex characters, a size that is not the length of anything.
+//
+// That is the same shape the session snapshot had, found there by three reviews in a row: an
+// inconsistent state was REPRESENTABLE, so every consistency property had to be restated as a check
+// somebody could forget. The fix is the same. There are exactly two ways to obtain an entry and
+// both of them make it consistent:
+//
+//   forBytes(...)     the bytes are in hand, so the leaf, the size and the digest are computed.
+//                     Used by save. Cannot produce a wrong entry.
+//   fromDocument(...) the file supplies them and the file may LIE, so this is where a lie is
+//                     refused — at the point the value enters, rather than in a validator further
+//                     in. Returns nothing when the leaf is not canonical or the digest is not 64
+//                     lowercase hex.
+//
+// EVERY FIELD IS PRIVATE, including the identity. Leaving `trackId` writable would let a caller
+// change it after construction and leave the leaf name naming the old track — the derived value
+// silently stale, which is worse than it being wrong from the start.
+class ArtifactEntry {
+ public:
+  ArtifactEntry() = default;
+
+  static ArtifactEntry forBytes(uint32_t trackId, uint32_t globalDeviceId, ArtifactKind kind,
+                                const std::vector<uint8_t>& bytes);
+  static std::optional<ArtifactEntry> fromDocument(uint32_t trackId, uint32_t globalDeviceId,
+                                                   ArtifactKind kind, const std::string& leafName,
+                                                   uint64_t size, const std::string& sha256);
+
+  uint32_t trackId() const { return trackId_; }
+  uint32_t globalDeviceId() const { return globalDeviceId_; }
+  ArtifactKind kind() const { return kind_; }
+  const std::string& leafName() const { return leafName_; }
+  uint64_t size() const { return size_; }
+  const std::string& sha256() const { return sha256_; }
 
   friend bool operator==(const ArtifactEntry&, const ArtifactEntry&) = default;
-  // AND != EXPLICITLY, for the C++17 reason every other leaf in this repo spells out.
   friend bool operator!=(const ArtifactEntry& a, const ArtifactEntry& b) { return !(a == b); }
+
+ private:
+  uint32_t trackId_ = 0;
+  uint32_t globalDeviceId_ = 0;
+  ArtifactKind kind_ = ArtifactKind::StateBlob;
+  std::string leafName_;
+  uint64_t size_ = 0;
+  std::string sha256_;  // lowercase hex, 64 chars
 };
 
 // THE ORDER, which is part of the identity: the generation id is a digest of the entries in this

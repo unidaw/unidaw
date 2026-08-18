@@ -178,7 +178,7 @@ void writeUiAutomationLanesTo(UiWriterDeps& deps, bool force) {
       // while the snapshot the scheduler reads stayed put — right on disk, wrong in your ears.
       // Publishing rt->track would have made this read-back agree with the file and disagree
       // with the sound, which is a read-back that certifies the bug instead of catching it.
-      auto ts = std::atomic_load_explicit(&rt->trackSnapshot, std::memory_order_acquire);
+      auto ts = rt->trackSnapshot.load();
       if (!ts) {
         continue;
       }
@@ -608,9 +608,7 @@ void runConsumerThread(ConsumerDeps& deps) {
             // to a pointer the producer loads atomically — mixed atomic/plain access to one
             // object, which is a data race whatever the values happen to be. The inconsistency
             // was visible within one statement of itself.
-            std::atomic_store_explicit(&child->trackSnapshot,
-                                       buildTrackSnapshot(child->track),
-                                       std::memory_order_release);
+            child->trackSnapshot.publish(buildTrackSnapshot(child->track));
           }
           std::atomic_store_explicit(&child->clipSnapshot, snapshot,
                                      std::memory_order_release);
@@ -1085,8 +1083,7 @@ void runConsumerThread(ConsumerDeps& deps) {
           char* dst = uiShm.header->uiTrackDeviceName[i];
           std::memset(dst, 0, daw::kUiTrackNameBytes);
           if (i < publishedTrackCount && i < trackSnapshot.size()) {
-            auto ts = std::atomic_load_explicit(&trackSnapshot[i]->trackSnapshot,
-                                                std::memory_order_acquire);
+            auto ts = trackSnapshot[i]->trackSnapshot.load();
             if (ts) {
               for (const auto& device : ts->chainDevices) {
                 if (device.kind == daw::DeviceKind::VstInstrument &&
@@ -1129,8 +1126,7 @@ void runConsumerThread(ConsumerDeps& deps) {
             std::memset(uiShm.header->uiTrackName[m], 0, daw::kUiTrackNameBytes);
             std::memcpy(uiShm.header->uiTrackName[m], "Master", 6);
             std::memset(uiShm.header->uiTrackDeviceName[m], 0, daw::kUiTrackNameBytes);
-            auto mts = std::atomic_load_explicit(&masterTrack->trackSnapshot,
-                                                 std::memory_order_acquire);
+            auto mts = masterTrack->trackSnapshot.load();
             if (mts && !mts->chainDevices.empty()) {
               const char* label = nullptr;
               // Prefer a real instrument name; else surface the first device's kind so a
@@ -1191,8 +1187,7 @@ void runConsumerThread(ConsumerDeps& deps) {
               continue;
             }
             // Rebuild the host's compacted insert order to recover each meter's device id.
-            auto ts = std::atomic_load_explicit(&rt->trackSnapshot,
-                                                std::memory_order_acquire);
+            auto ts = rt->trackSnapshot.load();
             if (!ts) {
               continue;
             }

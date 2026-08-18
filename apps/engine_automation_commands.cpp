@@ -107,9 +107,7 @@ void handleSetAutomationTarget(AutomationCommandDeps& deps,
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       snapshot = buildTrackSnapshot(runtime->track);
     }
-    std::atomic_store_explicit(&runtime->trackSnapshot,
-                               snapshot,
-                               std::memory_order_release);
+    runtime->trackSnapshot.publish(snapshot);
   }
   if (!updated) {
     daw::LogLine() << "UI: SetAutomationTarget - automation clip not found (track "
@@ -158,7 +156,7 @@ void handleRequestAutomationLane(AutomationCommandDeps& deps,
   // the model would describe the document; what a caller is asking about is the song.
   std::shared_ptr<const TrackStateSnapshot> ts;
   if (runtime) {
-    ts = std::atomic_load_explicit(&runtime->trackSnapshot, std::memory_order_acquire);
+    ts = runtime->trackSnapshot.load();
   }
   if (ts) {
     for (const auto& clip : ts->automationClips) {
@@ -316,8 +314,7 @@ void handleWriteAutomationPoint(AutomationCommandDeps& deps,
     std::lock_guard<std::mutex> lock(runtime->trackMutex);
     snapshot = buildTrackSnapshot(runtime->track);
   }
-  std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
-                             std::memory_order_release);
+  runtime->trackSnapshot.publish(snapshot);
   automationVersion.fetch_add(1, std::memory_order_acq_rel);
   DAW_EVENT("automation.point")
       .field("track", ap.trackId)
@@ -412,8 +409,7 @@ void handleDeleteAutomationPoint(AutomationCommandDeps& deps,
     std::lock_guard<std::mutex> lock(runtime->trackMutex);
     snapshot = buildTrackSnapshot(runtime->track);
   }
-  std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
-                             std::memory_order_release);
+  runtime->trackSnapshot.publish(snapshot);
   automationVersion.fetch_add(1, std::memory_order_acq_rel);
   DAW_EVENT("automation.point_deleted")
       .field("track", ap.trackId)

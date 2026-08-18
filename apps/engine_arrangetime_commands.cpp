@@ -377,8 +377,7 @@ void handleArrangeTime(ArrangeTimeCommandDeps& deps,
                                        std::memory_order_release);
           }
           if (stateSnap) {
-            std::atomic_store_explicit(&rt->trackSnapshot, stateSnap,
-                                       std::memory_order_release);
+            rt->trackSnapshot.publish(stateSnap);
           }
           bumpClipVersionFor(rt);
         }

@@ -114,8 +114,7 @@ bool restoreSongStore(SongStoreDeps& deps, const SongStoreState& state) {
         // republished is a point that does not play — the same rule as every other write here.
         snap = buildTrackSnapshot(runtime->track);
       }
-      std::atomic_store_explicit(&runtime->trackSnapshot, snap,
-                                 std::memory_order_release);
+      runtime->trackSnapshot.publish(snap);
       any = true;
     }
     {

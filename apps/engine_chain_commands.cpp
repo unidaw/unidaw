@@ -189,9 +189,7 @@ void handleAddDevice(ChainCommandDeps& deps,
       refreshSamplerForTrack(*runtime);
       snapshot = buildTrackSnapshot(runtime->track);
     }
-    std::atomic_store_explicit(&runtime->trackSnapshot,
-                               snapshot,
-                               std::memory_order_release);
+    runtime->trackSnapshot.publish(snapshot);
     // Reconcile the host. The master runs its own lifecycle (it is not in the tracks
     // vector); a patcher/mod-only master resolves to no plugins and launches nothing,
     // while a VST effect on the master brings its host up for the 4b sum-processing path.

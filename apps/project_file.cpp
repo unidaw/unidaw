@@ -578,12 +578,12 @@ std::string serializeProject(const ProjectDocument& document) {
   writer.beginArray("artifact_entries");
   for (const auto& entry : document.artifactEntries) {
     writer.beginArrayElement();
-    writer.key("track_id", entry.trackId);
-    writer.key("device_id", entry.globalDeviceId);
-    writer.key("kind", std::string(daw::artifactKindToString(entry.kind)));
-    writer.key("leaf", entry.leafName);
-    writer.key("size", entry.size);
-    writer.key("sha256", entry.sha256);
+    writer.key("track_id", entry.trackId());
+    writer.key("device_id", entry.globalDeviceId());
+    writer.key("kind", std::string(daw::artifactKindToString(entry.kind())));
+    writer.key("leaf", entry.leafName());
+    writer.key("size", entry.size());
+    writer.key("sha256", entry.sha256());
     writer.endArrayElement();
   }
   writer.endArray();
@@ -1476,17 +1476,23 @@ bool deserializeProject(const std::string& json,
     }
     parsed.artifactGeneration = *generation;
     for (const auto& item : *entries) {
-      daw::ArtifactEntry entry;
-      entry.trackId = item.second.get<uint32_t>("track_id", 0);
-      entry.globalDeviceId = item.second.get<uint32_t>("device_id", 0);
-      if (!daw::artifactKindFromString(item.second.get<std::string>("kind", ""), entry.kind)) {
+      // THROUGH THE VALIDATING FACTORY, which is where a document's lie is refused. The leaf name
+      // and the digest are the two things a file can carry that this engine did not compute, so
+      // they are checked at the point they enter rather than in a validator one layer in.
+      daw::ArtifactKind kind{};
+      if (!daw::artifactKindFromString(item.second.get<std::string>("kind", ""), kind)) {
         setError(error, "unknown artifact kind in project");
         return false;
       }
-      entry.leafName = item.second.get<std::string>("leaf", "");
-      entry.size = item.second.get<uint64_t>("size", 0);
-      entry.sha256 = item.second.get<std::string>("sha256", "");
-      parsed.artifactEntries.push_back(std::move(entry));
+      auto entry = daw::ArtifactEntry::fromDocument(
+          item.second.get<uint32_t>("track_id", 0), item.second.get<uint32_t>("device_id", 0), kind,
+          item.second.get<std::string>("leaf", ""), item.second.get<uint64_t>("size", 0),
+          item.second.get<std::string>("sha256", ""));
+      if (!entry) {
+        setError(error, "an artifact entry names a non-canonical leaf or a malformed digest");
+        return false;
+      }
+      parsed.artifactEntries.push_back(std::move(*entry));
     }
   }
   if (!validateGlobalDeviceIds(parsed, error)) {
@@ -1701,7 +1707,7 @@ bool saveProjectModule(const ProjectDocument& document,
       const std::string generationDir =
           artifactGenerationDir(stateBaseDir, packed.artifactGeneration);
       for (const auto& entry : packed.artifactEntries) {
-        const std::string onDisk = joinDir(generationDir, entry.leafName);
+        const std::string onDisk = joinDir(generationDir, entry.leafName());
         bool ok = false;
         std::vector<uint8_t> bytes = readWholeFile(onDisk, &ok);
         if (!ok) {
@@ -1709,13 +1715,13 @@ bool saveProjectModule(const ProjectDocument& document,
           // module that quietly drops a plugin's state is only found out after it has been sent.
           return fail("cannot read plugin state " + onDisk);
         }
-        if (bytes.size() != entry.size || sha256Hex(bytes) != entry.sha256) {
+        if (bytes.size() != entry.size() || sha256Hex(bytes) != entry.sha256()) {
           // VERIFIED ON THE WAY IN. The document commits these bytes by digest; packing something
           // else would produce a module that opens and restores a patch the sender never had.
           return fail("plugin state " + onDisk + " does not match the inventory digest");
         }
         ZipEntry e;
-        e.name = prefix + entry.leafName;
+        e.name = prefix + entry.leafName();
         e.data = std::move(bytes);
         entries.push_back(std::move(e));
       }

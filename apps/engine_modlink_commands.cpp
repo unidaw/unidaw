@@ -97,8 +97,7 @@ void handleAddModLink(ModlinkCommandDeps& deps,
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       snapshot = buildTrackSnapshot(runtime->track);
     }
-    std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
-                               std::memory_order_release);
+    runtime->trackSnapshot.publish(snapshot);
     emitModSnapshot(*runtime);
     DAW_EVENT(removing ? "modlink.removed" : "modlink.depth_set")
         .field("track", modPayload.trackId)
@@ -228,9 +227,7 @@ void handleAddModLink(ModlinkCommandDeps& deps,
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       snapshot = buildTrackSnapshot(runtime->track);
     }
-    std::atomic_store_explicit(&runtime->trackSnapshot,
-                               snapshot,
-                               std::memory_order_release);
+    runtime->trackSnapshot.publish(snapshot);
     emitModSnapshot(*runtime);
   }
   return;
@@ -280,9 +277,7 @@ void handleSetModLinkUid16(ModlinkCommandDeps& deps,
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       snapshot = buildTrackSnapshot(runtime->track);
     }
-    std::atomic_store_explicit(&runtime->trackSnapshot,
-                               snapshot,
-                               std::memory_order_release);
+    runtime->trackSnapshot.publish(snapshot);
     emitModSnapshot(*runtime);
   } else {
     emitModError(kModErrLinkMissing, modPayload.trackId, modPayload.linkId);

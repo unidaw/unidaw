@@ -92,9 +92,7 @@ void handleSetTrackRouting(TrackCommandDeps& deps,
     runtime->track.routing.preFaderSend = (routingPayload.flags & 0x1u) != 0;
     snapshot = buildTrackSnapshot(runtime->track);
   }
-  std::atomic_store_explicit(&runtime->trackSnapshot,
-                             snapshot,
-                             std::memory_order_release);
+  runtime->trackSnapshot.publish(snapshot);
   emitRoutingSnapshot(*runtime);
   return;
   }
@@ -181,9 +179,7 @@ void handleSetDeviceEuclideanConfig(TrackCommandDeps& deps,
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       snapshot = buildTrackSnapshot(runtime->track);
     }
-    std::atomic_store_explicit(&runtime->trackSnapshot,
-                               snapshot,
-                               std::memory_order_release);
+    runtime->trackSnapshot.publish(snapshot);
   } else {
     daw::LogLine() << "UI: SetDeviceEuclideanConfig failed - device "
               << configPayload.deviceId << " not found" << std::endl;
@@ -235,9 +231,7 @@ void handleAddTrack(TrackCommandDeps& deps,
               // The trackMutex held here does NOT protect this: the producer reads
               // trackSnapshot with an atomic load and never takes trackMutex, so the lock
               // orders this against other writers and against nothing that reads.
-              std::atomic_store_explicit(&existing->trackSnapshot,
-                                         buildTrackSnapshot(existing->track),
-                                         std::memory_order_release);
+              existing->trackSnapshot.publish(buildTrackSnapshot(existing->track));
             }
             existing->isAuxChild.store(false, std::memory_order_release);
             existing->parentId.store(0, std::memory_order_relaxed);

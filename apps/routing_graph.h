@@ -161,6 +161,13 @@ struct RoutingEdge {
   uint32_t destTrackId = 0; // meaningless when destIsMaster
   bool destIsMaster = false;
   bool preFaderSend = true; // canonical true except on an audio_out Track row
+
+  // COMPARABLE, because a consumer has to be able to ask "is this the graph I compiled?". The
+  // snapshot validator recompiles the graph from the authored plans and compares — the same
+  // discipline the launch carrier gets — and that needs equality on the edge, not a hand-written
+  // field-by-field loop at the call site which would silently stop covering a field added here.
+  friend bool operator==(const RoutingEdge&, const RoutingEdge&) = default;
+  friend bool operator!=(const RoutingEdge& a, const RoutingEdge& b) { return !(a == b); }
 };
 
 // NO `channel` FIELD, and that is a decision worth stating.
@@ -185,6 +192,11 @@ struct RoutingExternalSource {
   uint32_t trackId = 0;
   RoutingMedia media = RoutingMedia::Audio;
   uint32_t inputId = 0;
+
+  friend bool operator==(const RoutingExternalSource&, const RoutingExternalSource&) = default;
+  friend bool operator!=(const RoutingExternalSource& a, const RoutingExternalSource& b) {
+    return !(a == b);
+  }
 };
 
 struct RoutingGraph {

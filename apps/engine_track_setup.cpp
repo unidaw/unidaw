@@ -113,7 +113,7 @@ std::unique_ptr<TrackRuntime> setupTrackRuntime(TrackSetupDeps& deps, uint32_t t
     // publication path that skipped that mutex would break these writes while leaving the
     // sentence above still true.
     runtime->clipSnapshot = std::make_shared<ClipSnapshot>();
-    runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
+    runtime->trackSnapshot.assignBeforePublication(buildTrackSnapshot(runtime->track));
 
     runtime->patcherAudioBuffer.resize(
         static_cast<size_t>(baseConfig.blockSize) * baseConfig.numChannelsOut, 0.0f);
@@ -294,9 +294,7 @@ void reconcileChildTracks(ChildTrackDeps& deps, TrackRuntime& parent) {
           // mirrors it survive the reset. So a track routed to None, removed, and re-added in
           // this slot comes back SILENT, carrying the dead track's routing. Pre-existing and
           // untouched here; filed rather than fixed in a memory-ordering change.
-          std::atomic_store_explicit(&rt->trackSnapshot,
-                                     buildTrackSnapshot(rt->track),
-                                     std::memory_order_release);
+          rt->trackSnapshot.publish(buildTrackSnapshot(rt->track));
         }
         rt->parentId.store(parent.trackId, std::memory_order_relaxed);
         rt->collapsed.store(false, std::memory_order_relaxed);

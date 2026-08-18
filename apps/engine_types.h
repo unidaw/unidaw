@@ -52,6 +52,7 @@
 #include "apps/sampler_state.h"
 #include "apps/shared_memory.h"
 #include "apps/time_base.h"
+#include "apps/published_track_snapshot.h"
 #include "apps/track_routing.h"
 #include "apps/ui_snapshot.h"
 #include "apps/watchdog.h"
@@ -322,7 +323,10 @@ struct TrackRuntime {
   // no longer matches its sourcePlacements, so save flattens it instead
   // (edits win over structure until note entry is structural, M3.2).
   std::atomic<bool> arrangementDirty{false};
-  std::shared_ptr<const TrackStateSnapshot> trackSnapshot;
+  // PUBLISHED THROUGH ONE TYPE, so the twenty-four publications P-SNAPSHOT-PUBLISHERS counts are
+  // countable by construction rather than by scanning C++ for every shape a write can take. See
+  // apps/published_track_snapshot.h for the eleven shapes that defeated the scan.
+  PublishedTrackSnapshot trackSnapshot;
   // This track's placed audio regions, resolved to the sample domain + decoded,
   // for the audio thread to mix. Published via std::atomic_load/store on the
   // shared_ptr; empty/null when the track has no audio clips.

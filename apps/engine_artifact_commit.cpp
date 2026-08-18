@@ -193,12 +193,12 @@ bool commitArtifactGeneration(const std::string& stateDir,
   if (std::filesystem::exists(finalDir, ec)) {
     for (const auto& file : files) {
       std::vector<uint8_t> onDisk;
-      if (!readWhole(finalDir / file.entry.leafName, onDisk)) {
+      if (!readWhole(finalDir / file.entry.leafName(), onDisk)) {
         return setError("generation " + generation + " exists but is missing " +
-                        file.entry.leafName);
+                        file.entry.leafName());
       }
       if (onDisk != file.bytes) {
-        return setError("generation " + generation + " exists and " + file.entry.leafName +
+        return setError("generation " + generation + " exists and " + file.entry.leafName() +
                         " does not match its digest — the directory name says these are the "
                         "same bytes and they are not");
       }
@@ -233,9 +233,9 @@ bool commitArtifactGeneration(const std::string& stateDir,
   }
 
   for (const auto& file : files) {
-    if (!writeWhole(tempDir / file.entry.leafName, file.bytes)) {
+    if (!writeWhole(tempDir / file.entry.leafName(), file.bytes)) {
       std::filesystem::remove_all(tempDir, ec);
-      return setError("cannot write " + file.entry.leafName + " into generation " + generation);
+      return setError("cannot write " + file.entry.leafName() + " into generation " + generation);
     }
   }
 
@@ -245,13 +245,13 @@ bool commitArtifactGeneration(const std::string& stateDir,
   // repaired.
   for (const auto& file : files) {
     std::vector<uint8_t> onDisk;
-    if (!readWhole(tempDir / file.entry.leafName, onDisk)) {
+    if (!readWhole(tempDir / file.entry.leafName(), onDisk)) {
       std::filesystem::remove_all(tempDir, ec);
-      return setError("cannot read back " + file.entry.leafName + " from generation " + generation);
+      return setError("cannot read back " + file.entry.leafName() + " from generation " + generation);
     }
-    if (onDisk.size() != file.entry.size || daw::sha256Hex(onDisk) != file.entry.sha256) {
+    if (onDisk.size() != file.entry.size() || daw::sha256Hex(onDisk) != file.entry.sha256()) {
       std::filesystem::remove_all(tempDir, ec);
-      return setError(file.entry.leafName + " does not read back as what was written");
+      return setError(file.entry.leafName() + " does not read back as what was written");
     }
   }
 
@@ -266,7 +266,7 @@ bool commitArtifactGeneration(const std::string& stateDir,
     if (std::filesystem::exists(finalDir)) {
       for (const auto& file : files) {
         std::vector<uint8_t> onDisk;
-        if (!readWhole(finalDir / file.entry.leafName, onDisk) || onDisk != file.bytes) {
+        if (!readWhole(finalDir / file.entry.leafName(), onDisk) || onDisk != file.bytes) {
           std::filesystem::remove_all(tempDir, ec);
           return setError("generation " + generation +
                           " appeared during the rename and does not match");

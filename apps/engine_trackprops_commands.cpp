@@ -67,10 +67,7 @@ void handleSetTrackHarmonyQuantize(TrackpropsCommandDeps& deps,
     std::lock_guard<std::mutex> lock(runtime->trackMutex);
     runtime->track.harmonyQuantize = enable;
   }
-  std::atomic_store_explicit(
-      &runtime->trackSnapshot,
-      buildTrackSnapshot(runtime->track),
-      std::memory_order_release);
+  runtime->trackSnapshot.publish(buildTrackSnapshot(runtime->track));
   std::cout << "UI: Track " << payload.trackId
             << " harmony quantize " << (enable ? "on" : "off") << std::endl;
   }
@@ -96,10 +93,7 @@ void handleSetTrackSoundAddressed(TrackpropsCommandDeps& deps,
   }
   // PUBLISH THE SNAPSHOT, or the RT keeps dispatching under the old rule. The model and the
   // snapshot are two facts about one thing and the dispatch path reads only the second.
-  std::atomic_store_explicit(
-      &runtime->trackSnapshot,
-      buildTrackSnapshot(runtime->track),
-      std::memory_order_release);
+  runtime->trackSnapshot.publish(buildTrackSnapshot(runtime->track));
   DAW_EVENT("track.sound_addressed")
       .field("track", payload.trackId)
       .field("enabled", enable);
