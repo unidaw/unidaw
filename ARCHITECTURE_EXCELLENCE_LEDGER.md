@@ -6720,6 +6720,42 @@ to *"can the wrong state exist?"*. The second standard is strictly better, and t
 is going back for the places where it changes the answer rather than declaring earlier work fine
 because it passed a review written against the weaker one.
 
+### Making the wrong state unbuildable, three times over
+
+The snapshot work reached the same conclusion three times in one session, from three different
+directions, and it is the through-line of this step:
+
+| what was validated afterwards | what makes it unrepresentable |
+|---|---|
+| twenty-four publication sites found by scanning C++ | `PublishedTrackSnapshot`: private slot, two named writers |
+| the carrier, the owner map and the routing graph, recomputed and compared | `buildExecutionSnapshot` is the only constructor; those members are private to it |
+| `ArtifactEntry`'s leaf name, size and digest, checked by a validator | two factories: one derives them, one refuses a document's lie at the boundary |
+
+Each replaced a rule that could be forgotten with a shape that cannot be written. The measure of
+whether it worked is that **checks got deleted**: the leaf-name and digest checks, the owner-map
+comparison, the routing recompile-and-compare, and four tests whose states no longer exist.
+
+A guard that cannot fail reads as protection and is not — so removing one is not a loss of safety,
+it is the removal of a claim the code had stopped backing.
+
+### What a mutation sweep found, including about itself
+
+Forty-two validator guards were disabled one at a time. Thirty-eight were caught; the four survivors
+were each worth having:
+
+- **the owner-map comparison** — genuinely dead once the field became private, and deleted;
+- **the two patcher-edge endpoint checks** — the test used one edge with BOTH ends dangling, so
+  either check alone caught it and neither was individually necessary. Two edges, each bad at one
+  end, distinguish them;
+- **the duplicate-node-id check** — reported as surviving and *not* surviving. The sweep rebuilt
+  forty-two times in quick succession and hit the stale-object-file trap this ledger already
+  records: the binary under test was not the source under test. Re-checked with the object file
+  deleted, it is caught.
+
+That last one is the finding about the harness rather than the code, and it is the more useful one:
+**a sweep that rebuilds quickly can report a false survivor, so every survivor must be re-checked
+with the object forced out** before it is believed or acted on.
+
 ### Process errors, recorded because they cost measurement
 
 Engine checks were run **standalone while a full ctest run was in progress**. Both launch engines and
