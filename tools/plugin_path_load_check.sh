@@ -33,6 +33,7 @@
 #   tools/plugin_path_load_check.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/identity_plugin.sh"
 . "$ROOT/tools/lib/engine_wait.sh"
 BUILD="${DAW_BUILD_DIR:-$ROOT/build}"
 Q=960000
@@ -41,12 +42,11 @@ Q=960000
 
 # The engine's own default plugin — the thing a stale slot index resolves to, and therefore the
 # WRONG answer this check has to be able to see.
-DEFAULT_VST=""
-for cand in "$BUILD/identity_plugin_artefacts/RelWithDebInfo/VST3/Identity.vst3" \
-            "$BUILD/identity_plugin_artefacts/VST3/Identity.vst3"; do
-  [ -d "$cand" ] && { DEFAULT_VST="$cand"; break; }
-done
-[ -n "$DEFAULT_VST" ] || { echo "build identity_plugin_VST3 first"; exit 2; }
+# THIS LOOP IS NOW tools/lib/identity_plugin.sh. It was right here and hardcoded in seven other
+# checks, which is how a rule gets re-derived: being correct in one of eight places reads exactly
+# like being correct everywhere until a fresh build directory disagrees.
+DEFAULT_VST="$(resolve_identity_vst3 "$BUILD")" \
+  || { echo "build identity_plugin_VST3 first"; exit 2; }
 
 TMP="$(mktemp -d)"
 ENG=""

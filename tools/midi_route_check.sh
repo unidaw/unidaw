@@ -34,12 +34,18 @@
 #   tools/midi_route_check.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/identity_plugin.sh"
 BUILD="$ROOT/build"
 Q=960000
 SR=44100
 
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
-IDENTITY="$BUILD/identity_plugin_artefacts/VST3/Identity.vst3"
+# WHERE THE BUNDLE IS, asked of tools/lib/identity_plugin.sh rather than typed. The flat
+# `identity_plugin_artefacts/VST3/` path this used to hardcode is a layout JUCE stopped
+# emitting long ago (tools/webstack.sh records the same finding); it survives only as a
+# leftover in build directories that were configured before the change, so on a FRESH
+# checkout this check bailed with "build identity_plugin first" and read as a regression.
+IDENTITY="$(resolve_identity_vst3 "$BUILD")" || IDENTITY="$BUILD/identity_plugin_artefacts/VST3/Identity.vst3"
 [ -d "$IDENTITY" ] || { echo "build identity_plugin_VST3 first"; exit 2; }
 
 TMP="$(mktemp -d)"

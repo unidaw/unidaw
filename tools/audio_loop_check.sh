@@ -25,6 +25,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/identity_plugin.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -63,7 +64,12 @@ w.writeframes(b''.join(struct.pack('<h', 28000 if i < sr // 50 else 0)
 w.close()
 PY
 
-IDENTITY="$BUILD/identity_plugin_artefacts/VST3/Identity.vst3"
+# WHERE THE BUNDLE IS, asked of tools/lib/identity_plugin.sh rather than typed. The flat
+# `identity_plugin_artefacts/VST3/` path this used to hardcode is a layout JUCE stopped
+# emitting long ago (tools/webstack.sh records the same finding); it survives only as a
+# leftover in build directories that were configured before the change, so on a FRESH
+# checkout this check bailed with "build identity_plugin first" and read as a regression.
+IDENTITY="$(resolve_identity_vst3 "$BUILD")" || IDENTITY="$BUILD/identity_plugin_artefacts/VST3/Identity.vst3"
 [ -d "$IDENTITY" ] || { echo "build identity_plugin_VST3 first"; exit 2; }
 
 # An audio click hard LEFT and a note-driven pulse hard RIGHT, both at tick 0 of a
