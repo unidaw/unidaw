@@ -93,6 +93,20 @@ void resetTrackContent(TrackRuntime& rt) {
   // a derivation is how they disagree, so this is written the one way it is written there.
   rt.routesToMaster.store(rt.track.routing.audioOut.kind != daw::TrackRouteKind::None,
                           std::memory_order_relaxed);
+  // AND SO IS AUDIO ANOTHER TRACK ALREADY DELIVERED. A source that rendered before the removal
+  // has its output sitting in a slot addressed to a block that is still to come; without this the
+  // track reusing the id hears it. The same class of bug as the routing above, one field along.
+  rt.inboundAudio.reset(rt.inboundMutex);
+  // AND ITS NEIGHBOUR, which the first version of this left behind. inboundMidiEvents is filled by
+  // the same routing pass, from the same sources, and is drained below the same four early returns —
+  // so a destination whose host has died accumulates events without bound, and a track reusing the
+  // id inherits them. Fixing one field and not the one declared beside it is how "the same class of
+  // bug, one field along" became a comment about the field that was fixed.
+  {
+    std::lock_guard<std::mutex> lock(rt.inboundMutex);
+    rt.inboundMidiEvents.clear();
+    rt.inboundMidiScratch.clear();
+  }
   rt.sourcePlacements.clear();
   rt.ownedClips.clear();
   rt.editableClipIds.clear();

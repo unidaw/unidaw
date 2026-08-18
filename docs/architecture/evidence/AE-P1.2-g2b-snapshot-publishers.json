@@ -94,7 +94,7 @@
     },
     {
       "file": "apps/engine_track_setup.cpp",
-      "line": 297,
+      "line": 300,
       "text": "rt->trackSnapshot.publish(buildTrackSnapshot(rt->track));"
     },
     {

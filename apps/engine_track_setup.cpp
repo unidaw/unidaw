@@ -140,7 +140,10 @@ std::unique_ptr<TrackRuntime> setupTrackRuntime(TrackSetupDeps& deps, uint32_t t
 
     const size_t inputSamples =
         static_cast<size_t>(baseConfig.blockSize) * baseConfig.numChannelsOut;
-    runtime->inboundAudioBuffer.assign(inputSamples, 0.0f);
+    // A FRESH RUNTIME HAS NO DELIVERIES. The slots size themselves on first delivery, so
+    // there is nothing to pre-assign — and nothing that can be assigned to only one of
+    // them, which is what an earlier version of this could get wrong.
+    runtime->inboundAudio.resetBeforePublication();
     runtime->inputAudioBuffer.assign(inputSamples, 0.0f);
     runtime->inputAudioChannels.resize(baseConfig.numChannelsOut);
     for (uint32_t ch = 0; ch < baseConfig.numChannelsOut; ++ch) {

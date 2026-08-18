@@ -64,7 +64,7 @@
   "controls": [
     {
       "command": "python3 tools/architecture/ae_p1_3_packet_check.py",
-      "working_directory": "/Users/jak/src/daw-ae-p1-3-nonoverlap-packet",
+      "working_directory": "the AE-P1.3 packet worktree (packet.commit above), not the product tree",
       "result": "PASS: 25 offset regions, 26 compared spans, 26 manifest records"
     },
     {

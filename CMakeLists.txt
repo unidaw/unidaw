@@ -1961,6 +1961,18 @@ add_test(NAME execution_snapshot COMMAND execution_snapshot_tests)
 set_tests_properties(execution_snapshot PROPERTIES TIMEOUT 120)
 add_test(NAME routing_matrix COMMAND routing_graph_tests)
 set_tests_properties(routing_matrix PROPERTIES TIMEOUT 120)
+# R-ROUTING-AUTHORITY's one-block delivery, on the production object. The earlier version of this
+# test called two exposed index functions and so stayed GREEN when the producer's call sites were
+# reverted — measured by independent review, not argued. InboundAudio keeps the slot rule private and
+# this drives that object, so a revert INSIDE it fails here.
+#
+# ITS LIMIT, so nobody reads this as full coverage: it links no engine code, so it cannot see the
+# block id the producer PASSES. A call site rewritten to deliver same-block still goes unnoticed by
+# every registered test. Closing that needs a check that observes delivery through the producer.
+add_executable(inbound_audio_tests apps/inbound_audio_tests_main.cpp)
+target_include_directories(inbound_audio_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME inbound_audio COMMAND inbound_audio_tests)
+set_tests_properties(inbound_audio PROPERTIES TIMEOUT 60)
 # The control that would have caught the laundering: a legacy manifest whose embedded pair does
 # not match its own filename must FAIL the load, not be silently restamped to agree.
 add_test(NAME artifact_legacy_key

@@ -1,5 +1,7 @@
 #include "engine_produce_block.h"
 
+#include "apps/inbound_audio.h"
+
 // What the block body reaches for beyond the module header. This file arrived carrying
 // main.cpp's includes, which described where it used to live rather than what it uses.
 #include "engine_audio_callback.h"
@@ -525,18 +527,18 @@ void produceBlock(ProducerBlockDeps& deps,
           const size_t expectedSamples =
               static_cast<size_t>(engineConfig.blockSize) *
               static_cast<size_t>(engineConfig.numChannelsOut);
+          // ADDRESSED TO THE DESTINATION'S NEXT BLOCK. A source's output belongs to block N+1 of
+          // whatever it routes into; which block that is, and therefore which slot, is the type's
+          // business and not this call site's.
           std::lock_guard<std::mutex> lock(dst.inboundMutex);
-          dst.inboundAudioArrived.store(true, std::memory_order_relaxed);
-          if (dst.inboundAudioBuffer.size() != expectedSamples) {
-            dst.inboundAudioBuffer.assign(expectedSamples, 0.0f);
-          }
+          std::vector<float>& delivery =
+              dst.inboundAudio.deliveryBufferFor(blockId, expectedSamples);
           for (uint32_t ch = 0; ch < engineConfig.numChannelsOut; ++ch) {
             const float* input = channels[ch];
             if (!input) {
               continue;
             }
-            float* dest = dst.inboundAudioBuffer.data() +
-                static_cast<size_t>(ch) * engineConfig.blockSize;
+            float* dest = delivery.data() + static_cast<size_t>(ch) * engineConfig.blockSize;
             for (uint32_t i = 0; i < engineConfig.blockSize; ++i) {
               dest[i] += input[i];
             }
@@ -580,16 +582,14 @@ void produceBlock(ProducerBlockDeps& deps,
                   static_cast<size_t>(ch) * engineConfig.blockSize;
             }
           }
-          routedAudioArrived = runtime->inboundAudioArrived.exchange(
-              false, std::memory_order_relaxed);
-          if (runtime->inboundAudioBuffer.size() == expectedSamples) {
-            std::copy(runtime->inboundAudioBuffer.begin(),
-                      runtime->inboundAudioBuffer.end(),
-                      runtime->inputAudioBuffer.begin());
-            std::fill(runtime->inboundAudioBuffer.begin(),
-                      runtime->inboundAudioBuffer.end(),
-                      0.0f);
-          } else {
+          // WHAT WAS ADDRESSED TO THIS BLOCK, if anything was. A delivery aimed at a block this
+          // track never rendered is not readable here — it is dropped rather than summed into a
+          // later block, which is what a plain two-slot scheme would have done every time one of
+          // the early returns above skipped a destination's block.
+          routedAudioArrived =
+              runtime->inboundAudio.takeDeliveryFor(blockId, expectedSamples,
+                                                     runtime->inputAudioBuffer);
+          if (!routedAudioArrived) {
             std::fill(runtime->inputAudioBuffer.begin(),
                       runtime->inputAudioBuffer.end(),
                       0.0f);
@@ -1166,13 +1166,30 @@ void produceBlock(ProducerBlockDeps& deps,
       // Almost everything processTrack touches belongs to its own track: its SHM, its rings,
       // its buffers, its sampler. Two things do not, and they decide this partition.
       //
-      // The first is track-to-track ROUTING. A track whose audioOut or midiOut names another
-      // track pushes into that track's inbound buffers at the end of its block, and the
-      // destination swaps those buffers in at the start of its own. Whether the destination
-      // sees this block's audio or next block's therefore depends on which of the two runs
-      // first — and the audio accumulates with `+=`, which is not associative in floating
-      // point, so even the order of two sources into one destination is audible. Both ENDS of
-      // every such route go in the serial group, in exactly the order they have today.
+      // The first is track-to-track ROUTING, and it is now HALF the reason it was.
+      //
+      // It used to be two things at once. "Whether the destination sees this block's audio or next
+      // block's depends on which of the two runs first" is GONE: InboundAudio (apps/inbound_audio.h)
+      // addresses each delivery to the destination block it is FOR, so a source's block-N output is
+      // readable by block N+1 and by no other block, whichever end runs first.
+      //
+      // WHAT BACKS THAT, and what does not. The inbound_audio test drives that object and fails when
+      // the rule inside it is reverted — three separate reverts, each caught. There is no end-to-end
+      // evidence: the check that renders one project twice with the track ids swapped is unregistered
+      // and declared, because its run-to-run variation is larger than the difference it measures. An
+      // earlier version of this comment cited that check's numbers as proof; they were withdrawn, and
+      // this is exactly where a reader would have met them.
+      //
+      // WHAT REMAINS IS THE REDUCE ORDER, and it is why routed tracks are still here. The audio
+      // accumulates with `+=`, which is not associative in floating point, so the order of two
+      // sources into one destination is audible even when every source is a block late.
+      // R-ROUTING-AUTHORITY fixes that order — "Fan-in reduces in ascending {sourceTrackId,
+      // sourceBus, channel} order" — but a deterministic reduce needs each source's contribution
+      // staged separately and summed in that order at consume time, which is a change this has not
+      // made. Until it does, the order is pinned here.
+      //
+      // So: both ENDS of every such route still go in the serial group. Removing them is not a
+      // consequence of the parity fix alone, and claiming it would be claiming half a change.
       //
       // The second is the keyjazz PREVIEW path, which allocates note ids from one shared
       // counter. Ids do not change what is heard, but they do change what is logged and

@@ -20,6 +20,7 @@
 // to come first. That closure was computed before the move rather than discovered by a failed
 // build.
 #include <atomic>
+#include "apps/inbound_audio.h"
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -303,9 +304,6 @@ struct TrackRuntime {
   // clips they reference, both owned per-track (copy-on-write from the loaded
   // project). track.clip is DERIVED from these by flattenPlacements after every
   // edit; edits mutate the store, not track.clip. Both guarded by trackMutex.
-  // Set when another track routed audio INTO this one, so the input-plane write can tell
-  // whether it is about to discard something. Cleared as the inbound buffer is swapped in.
-  std::atomic<bool> inboundAudioArrived{false};
   // One warning per track, not one per block: a routed sampler track would otherwise log at
   // the block rate forever, and the log becomes the thing you have to fix.
   std::atomic<bool> warnedSamplerAteInput{false};
@@ -488,7 +486,11 @@ struct TrackRuntime {
   std::mutex modSourcesMutex;
   std::vector<daw::ModSourceState> modSources;
 
-  std::vector<float> inboundAudioBuffer;
+  // Audio routed INTO this track by another track. The one-block delivery guarantee
+  // (R-ROUTING-AUTHORITY) lives in the type rather than here: it owns the two slots, the
+  // only place a slot is chosen, and the stamp that makes a delivery readable by exactly
+  // the block it was addressed to. See apps/inbound_audio.h.
+  InboundAudio inboundAudio;
   std::vector<float> inputAudioBuffer;
   std::vector<float*> inputAudioChannels;
   // Movement 4 sidechain: the key signal pulled from the source track's output this

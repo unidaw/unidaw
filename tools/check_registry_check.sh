@@ -49,6 +49,32 @@ cmake = (root / "CMakeLists.txt").read_text()
 # Note the reasons are all about the SUBJECT of the check, never about it being slow, awkward or
 # occasionally flaky. A reason that could excuse anything excuses everything.
 DECLARED_UNREGISTERED = {
+    "routing_block_determinism_check.sh":
+        "IT COMPARES AN ABSOLUTE SAMPLE INDEX ACROSS TWO SEPARATE ENGINE LAUNCHES, which is a defect "
+        "in the discriminator and not a property of the subject -- every start-up alignment "
+        "difference presents as signal. It renders one project twice with the track ids swapped, "
+        "which swaps their processing order, and compares where the audio ends; under "
+        "R-ROUTING-AUTHORITY both renders must land on the same sample, and under the old "
+        "single-buffer code they land ONE block apart (one ordering delivers same-block, the other "
+        "next-block -- audio cannot arrive before it is rendered, so nothing can be a block EARLY). "
+        "It also keeps only that one number per run, discarding the first-audible sample, the energy "
+        "and the block count that would identify the cause. A discriminator measured WITHIN one "
+        "render would need no second launch; tools/sidechain_check.sh already does something of that "
+        "shape, asserting a relative onset ordering inside a single render. "
+        "ITS OBSERVED DISAGREEMENTS ARE THREE TO FIVE BLOCKS, in either direction and independently "
+        "of the routing, against a one-block property -- but note what that sample is and is not. "
+        "keep_evidence_then retains a directory only when the run FAILED, so every kept run is a "
+        "disagreement by construction and the set cannot estimate run-to-run variation at all; it "
+        "can only show that large disagreements occur. The kept timestamps also show three runs "
+        "finishing within eight seconds, so concurrent instances contaminated part of it. An earlier "
+        "version of this entry said two of those runs overlapped a ctest run; review reconstructed "
+        "every ctest window and none of them does. Withdrawn. "
+        "WHAT REPLACED IT AS THE GATE is inbound_audio (apps/inbound_audio_tests_main.cpp), which "
+        "drives the production InboundAudio object and fails when the slot rule, the target block or "
+        "the stamp is reverted inside it. That is narrower than this script: it cannot see the block "
+        "id the PRODUCER passes, so a call site rewritten to deliver same-block still goes "
+        "unnoticed. This script stays because a reproduction is worth more than a description to "
+        "whoever redesigns the discriminator.",
     "tsan/flapping_guard_race_repro.cpp":
         "EVIDENCE, NOT A GATE, and it must not be mistaken for one. It reproduced the HOST-R3c "
         "race by running the two production statement sequences against a real TrackRuntime under "
