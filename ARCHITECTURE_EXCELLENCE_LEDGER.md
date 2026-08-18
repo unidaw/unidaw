@@ -7076,3 +7076,21 @@ the number was stated as measured fact and derived from nothing.
   untouched, that the delivery buffer is sized to what was asked for, and it read only sample 0 of
   four. Two branches that silently destroy audio had no test at all. All covered now, and the three
   reverts still fail it.
+
+### Item 18 closed
+
+`58e5c5a1` on `ae/p1-2-g2b-implementation`, pushed. **245 ctest tests, 0 failed, `audio_stability`
+skipped** — read from the run's own log after it exited, which is worth saying only because the
+previous draft of that commit ended with a count taken from a suite still in flight.
+
+Three review rounds, and each found what the previous could not: the first killed the *design* (two
+exposed index functions no unit test could ratchet), the second killed the *claims*, the third killed
+the *repair* (a use-after-free the repair itself introduced). **No round was redundant, and the third
+was the one that found a real crash.** The lesson is not "review more" — it is that a fix, a claim
+and a repair are three different objects, and reviewing one says nothing about the other two.
+
+What ships with its limits written at each place a reader meets them: delivery is addressed to the
+block it is for, so processing order cannot change it; the type ratchets against reverts inside
+itself but **not** against the block id its callers pass; sidechain is neither N−1 nor serialised;
+MIDI already satisfied the rule by a different mechanism and this should not be credited with it;
+and the serial group stays until fan-in reduces deterministically.
