@@ -6502,3 +6502,122 @@ of a project with master FX) rather than silent. Whether closing it belongs to i
 owner call: `R-HOST-PLAN-AUTHORITY` covers "every track/master plan" and lands at step 4, so the
 natural home is there rather than here, and it was left rather than folded into a step that does not
 claim it.
+
+## AE-P1.2 G2-B implementation step 3: routing normalization (2026-08-18)
+
+Step 3 is complete at `c1608d74` on `ae/p1-2-g2b-implementation`. Like steps 1 and 2 it lands **no**
+frozen record and has **no** test bound to it — `R-ROUTING-AUTHORITY` completes at step 4, where the
+graph is compiled into the session ExecutionSnapshot. Nothing below closes anything.
+
+### What the step is for, in the product's own words
+
+`apps/engine_produce_block.cpp`, explaining why routed tracks are forced into a serial group:
+
+> "Whether the destination sees this block's audio or next block's therefore depends on which of the
+> two runs first"
+
+One inbound buffer, produced and consumed inside the same block. The serial group **pins** the order
+instead of removing the dependence on it, and the record forbids exactly that: *"runtime/worker
+order cannot change same- versus next-block delivery."* Separately, `routesToMaster` is
+`audioOut.kind != None`, so a track routed to **another track** was still summed into the master
+mix — the frozen row is named `declare_one_track_destination_without_direct_master`.
+
+`compileRoutingGraph` is the normalizer: authored lanes in, one directed graph or the first refusing
+rule out. All 20 rows, every normalization clause, the latency plan, and **no cycle check** — "Track
+cycles are valid delayed feedback with one block per edge", so refusing them would refuse a feature.
+
+### Iterated, not restated — and the checker was not being run
+
+`T-ROUTING-MATRIX` requires the implementation to **iterate** the exact 5×4 matrix, so the step-map
+checker now emits `apps/routing_matrix_generated.h` from the frozen packet and byte-compares it. In
+the course of that: **the checker was not registered in ctest at all**, so the pin on both frozen
+packets — commit *and* manifest digest — had been verified only when someone remembered to run it by
+hand. A guard that exists and is not invoked reads as coverage and provides none.
+
+### Three independent reviews, 46 findings
+
+The first reviewer brute-forced the compiler over ~20M lane configurations against seven invariants
+and found it **correct**; every finding was in the fixture, the guards, or the prose. The third
+review found two real defects that two rounds had passed over:
+
+- **Aux children projected the parent's MIDI and sidechain edges, one per bus.** A parent with a
+  3-bus multi-out instrument sending MIDI to another track delivered every note three times. An aux
+  child is a derived *output-bus* projection and an output bus is audio. The obvious objection —
+  this product has a MIDI-per-bus feature — runs the other way: a child's own notes are rendered
+  into the *parent's* host ring tagged with the bus channel. Inbound content, not a routing edge.
+- **Master shared a value space with track ids.** `kMaster` was `0xFFFFFFFF` inside the same
+  `std::set` as real destinations, so a track routed to track `0xFFFFFFFF` — an id
+  `project_file.cpp` accepts, reading `track_id` with no upper bound — compiled to a **master**
+  edge. The named destination got nothing, master was summed with audio it should never have had,
+  and the edge's latency charge fell from one block to zero, for the row whose frozen effect is
+  literally `declare_one_track_destination_WITHOUT_DIRECT_MASTER`. Master is a typed field now.
+
+### A count standing in for a name, three times in one guard
+
+`routing_graph.h` claimed a new lane was a compile error. It was not: `-Werror=switch` cannot see a
+hand-written table, and phase 1 iterates one. The guard went through three forms:
+
+| form | why it failed |
+|---|---|
+| `kRoutingLaneCount = 5`, hand-written | the constant did not change when the enum did, so it could not fire |
+| the frozen lane count | cannot see a **duplicate** — five entries with one lane never visited compiles clean |
+| a `constexpr` bitmask over the tables | constrains identity; both duplicate attacks fire it |
+
+The second form was also arithmetically unsatisfiable at six lanes (`2p−1` is always odd) while its
+message instructed the maintainer to add a pair — a guard whose instructions cannot be followed gets
+deleted. **The cardinality half of this was found by us and the third form was still written only
+after a reviewer demonstrated the second one passing.**
+
+### The fixture tested half the table
+
+Every normalization test used `audioIn`/`audioOut` only, and **nine** distinct sabotages of the MIDI
+half passed — including disabling the `midi_out`/`midi_in` pair entirely, so a project where
+`A.midiOut = Track(B)` compiled to a graph with **zero MIDI edges** and B received no notes. The
+rules are stated over media lanes and now run over media lanes. Separately `row.effect` was asserted
+for 6 of 20 rows beneath a comment claiming all three columns were asserted; every valid effect now
+has graph assertions, and an unrecognised effect is a failure rather than a skip.
+
+The aux-child test was the one left single-media after that parametrisation — and it sat directly on
+top of the one place where the MIDI half was genuinely broken. **The coverage gap and the defect were
+in the same place because the same person chose both.**
+
+### Quote fidelity, which is this effort's own subject
+
+Three files attributed R-MASTER-CORRELATION's sentence to R-TRANSACTIONAL-EVENT-BATCH; correcting
+the attribution **imported the word "their" from the record it had just moved away from**.
+`aux_child_rule` was quoted without "**execution** identity", which turns a narrow claim into "the
+child is the parent". A recorded deviation's `why` had capitalised part of the record's sentence
+inside its own quote marks, and the checker guarded only `requires` — it guards both now, keyed on
+double quotes, because matching single-quoted spans immediately reported three false positives on
+ordinary apostrophes (`record's`, `object's`). Widening that pattern is how it grows until it matches
+everything; the fix is a delimiter prose does not use.
+
+### Controls
+
+Every fix has a control that was **run**, not asserted: the nine MIDI sabotages, four compiler ones,
+seven more, both duplicate-table attacks, the sixth-lane attack, the consistent-corruption attack on
+the vocabulary, and the misquote-in-`why` attack. Two of ours did not fire first time, both the same
+shape — the fixture's own helper zeroed the error struct before every call, so the API's
+clear-on-success was untestable, and a `7 -> 2` rewrite was width-preserving so a stale-offset
+sabotage changed nothing. Both tests were rebuilt to be able to fail.
+
+### Verified
+
+`ctest` 241 tests: **240 passed, 1 failed — `repository_integrity`**, pre-existing and unrelated
+(the same 2 absolute-path violations from
+`docs/architecture/evidence/AE-P1.3-nonoverlap-542d8838.json:67`), reproduced on the frozen product
+worktree. Build clean at zero `error:` occurrences. Step map: 8 steps, 45 records (33 landed, 12
+excused), 45 tests all bound, 7 textual edges, **4** recorded deviations — the new one being the
+sidechain/cardinality divergence, which is between two statements of one rule *inside the frozen
+packet*: the record scopes it to complementary lanes, the machine-readable object says "each media
+lane". The record wins, and the choice is recorded rather than left in the code to be discovered.
+
+Two process errors, recorded because they cost real time: a suite was rebuilt under itself at
+171/241 and had to be discarded, and two comment-only edits landed during the replacement run, so
+the affected targets were rebuilt and re-verified rather than assumed.
+
+### Open
+
+Steps 4-8 remain. Step 4 is the session ExecutionSnapshot — 8 records and 12 tests, the largest
+single step, and the one that makes everything steps 1-3 built into the sole execution authority.
+The master-FX artifact gap recorded under step 2 belongs there.
