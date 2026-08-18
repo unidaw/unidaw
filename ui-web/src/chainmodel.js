@@ -427,12 +427,19 @@ function busPartialText(have, want) {
 /**
  * The key a device's parameters are stored and looked up under.
  *
- * (track, device), never device alone. DEVICE IDS ARE PER-TRACK: in
- * presets/projects/maximal.uniproj.json all six tracks have a device with
- * `device_id: 0`, so a map keyed on the id alone has ONE slot for every track's
- * first device. The last answer to arrive wins and every track's rack shows that
- * plugin's name and parameters — six tracks all reporting "Analog Heat", and a
- * plugin you just added never appearing because the slot is already full.
+ * (track, device), never device alone.
+ *
+ * IT WAS WRITTEN FOR A RULE THAT HAS SINCE CHANGED, and the pair is still right. Device ids used
+ * to be PER-TRACK: in presets/projects/maximal.uniproj.json all six tracks had a device with
+ * `device_id: 0`, so a map keyed on the id alone had ONE slot for every track's first device — the
+ * last answer to arrive won and every track's rack showed that plugin's name and parameters, six
+ * tracks all reporting "Analog Heat", with a plugin you just added never appearing because the
+ * slot was already full.
+ *
+ * Ids are PROJECT-GLOBAL since AE-P1.2 G2-B item 18 (apps/stable_device_id.h), so the id alone
+ * would now be unambiguous and the pair is merely redundant. It stays because redundant is not
+ * wrong, because a project saved before the migration still round-trips through here, and because
+ * changing a key to save a word is how a cache starts disagreeing with the request that filled it.
  *
  * The REQUEST side already keyed on the pair; only the store and the lookup did
  * not, so the right question was asked and the answer was filed under the wrong

@@ -1268,8 +1268,16 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                 // into bit 0 — the client draws a stepped curve for a discrete clip and a
                 // ramped one otherwise, and a lane that draws the wrong shape for half its
                 // curves is worse than one that draws none.
+                // BIT 1 CARRIES "this lane does not dispatch" beside bit 0's `discrete`.
+                //
+                // A disabled lane publishes the all-target sentinel in `target_plugin_index`
+                // because it has no device id to send, so without this bit the client cannot tell
+                // it from a lane that drives every plugin — and would draw an ordinary curve for
+                // one that plays nothing. AE-P1.2 G2-B item 18, R-PROJECT-TARGET-MIGRATION.
+                let flags = (if l.discrete { 1u32 } else { 0 })
+                    | (if l.target_disabled { 2u32 } else { 0 });
                 out.automation.push((l.track_id, l.target_plugin_index, l.point_count,
-                                     if l.discrete { 1 } else { 0 }, l.param_id.clone()));
+                                     flags, l.param_id.clone()));
             }
         }
     }

@@ -3134,12 +3134,16 @@ test('the programmatic gap does not grow, and cannot rot', () => {
 });
 
 test('two tracks with the same device id do not share one plugin', () => {
-  // DEVICE IDS ARE PER-TRACK. In presets/projects/maximal.uniproj.json all six
-  // tracks have a device with `device_id: 0`, so a parameter map keyed on the id
-  // ALONE has one slot for every track's first device: the last answer to arrive
-  // wins and every track's rack shows that plugin. Reported from the app as
-  // "I added Zebralette but the chain shows Analog Heat on all channels" — and
-  // the plugin you just added never appears, because the slot is already full.
+  // THE SCENARIO IS HISTORICAL NOW, AND THE PROPERTY IS NOT. Device ids used to be PER-TRACK: in
+  // presets/projects/maximal.uniproj.json all six tracks had a device with `device_id: 0`, so a
+  // parameter map keyed on the id ALONE had one slot for every track's first device — the last
+  // answer to arrive won and every track's rack showed that plugin. Reported from the app as
+  // "I added Zebralette but the chain shows Analog Heat on all channels".
+  //
+  // Ids are PROJECT-GLOBAL since AE-P1.2 G2-B item 18, so a NEW project cannot reach this state.
+  // The test stays because the map must still be keyed on the pair for any project written before
+  // the migration, and because "keys on (track, device)" is the property — not "device ids
+  // collide", which was only the way the defect was discovered.
   //
   // The REQUEST side always keyed on the pair, so the right question was asked
   // and the answer was filed under the wrong name.
@@ -5164,15 +5168,22 @@ test('CONTROL: a REAL template skeleton with invented variable content IS caught
     }));
 
   // BLINDNESS FLOOR. Every assertion below is "for each template", so an extraction matching
-  // nothing satisfies all of them. 604 qualify in the current reviewed tool-script corpus; FEWER
+  // nothing satisfies all of them. 608 qualify in the current reviewed tool-script corpus; FEWER
   // means the pattern
   // stopped matching, not that the scripts got safer.
+  //
+  // MOVED 604 -> 608 DELIBERATELY, and here is the decision this ratchet asks for. All four are in
+  // tools/lint_check.sh, from the `refuses()` helper added by AE-P1.2 G2-B step 1: three daw_lint
+  // rules (track-id-duplicate, device-id-duplicate, modlink-device-missing) became unreachable
+  // when the loader started refusing those documents outright, so they were removed and the check
+  // now asserts the REFUSAL instead — four new interpolating diagnostics naming what was refused
+  // and why. Counted per file against the frozen product base to confirm no other script moved.
   // The floor is the COUNT, not a round number below it. `>= 500` permitted 61 templates to vanish
   // in silence, which is the same slack that lets a population shrink without anyone deciding to.
   // EXACT, not a floor. `>=` cannot see templates being ADDED either, and a population that may
   // only grow is as unpinned as one that may only shrink.
-  assert.equal(templates.length, 604,
-    `${templates.length} interpolating templates found; 604 qualified at the reviewed pin. `
+  assert.equal(templates.length, 608,
+    `${templates.length} interpolating templates found; 608 qualified at the reviewed pin. `
     + 'Fewer means the extraction stopped matching; more means the corpus grew. Either way a '
     + 'person decides and moves this number deliberately.');
 

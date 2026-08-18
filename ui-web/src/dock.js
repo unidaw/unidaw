@@ -366,9 +366,20 @@ export function createCommands(api) {
           return t === undefined ? 'nothing in this song is automated'
                                  : `nothing on track ${t} is automated`;
         }
+        /*
+         * A DISABLED LANE SAYS SO. Its target is a legacy compact plugin index that no longer
+         * identifies anything, so it keeps every point and drives nothing (AE-P1.2 G2-B item 18,
+         * R-PROJECT-TARGET-MIGRATION).
+         *
+         * Without this the row is indistinguishable from a working one — a disabled lane
+         * publishes the all-target sentinel because it has no device id to send — so the answer
+         * to "which parameters are automated" would list curves that play silence and give no
+         * hint why.
+         */
         const rows = m.list.map((l) =>
           `t${l.track}  ${l.param}  ${l.points} point${l.points === 1 ? '' : 's'}`
-          + `  ${l.discrete ? 'stepped' : 'ramped'}`);
+          + `  ${l.discrete ? 'stepped' : 'ramped'}`
+          + (l.targetDisabled ? '  [target unresolvable — plays nothing; re-aim it]' : ''));
         // Truncation is reported. An incomplete list that says nothing reads as a complete one.
         if (m.truncated) rows.push(`… and ${m.truncated} more the engine could not publish`);
         return rows.join('\n');

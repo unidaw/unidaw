@@ -895,7 +895,8 @@ export function decode(buf, store) {
     if (version !== store.automationVersion || have !== store.automationCount) {
       store.automationVersion = version;
       while (store.automation.length < have) {
-        store.automation.push({ track: 0, target: 0, points: 0, discrete: false, param: '' });
+        store.automation.push({ track: 0, target: 0, points: 0, discrete: false,
+                                targetDisabled: false, param: '' });
       }
       for (let i = 0; i < have; i++) {
         const o = at + i * AUTOMATION_BYTES;
@@ -903,7 +904,19 @@ export function decode(buf, store) {
         l.track = v.getUint32(o, true);
         l.target = v.getUint32(o + 4, true);
         l.points = v.getUint32(o + 8, true);
-        l.discrete = (v.getUint32(o + 12, true) & 1) !== 0;
+        const flags = v.getUint32(o + 12, true);
+        l.discrete = (flags & 1) !== 0;
+        /*
+         * BIT 1: THIS LANE DOES NOT DISPATCH. Its target is a legacy compact plugin index that no
+         * longer identifies anything (AE-P1.2 G2-B item 18, R-PROJECT-TARGET-MIGRATION).
+         *
+         * READ IT BEFORE TRUSTING `target`. A disabled lane publishes the all-target sentinel
+         * because it has no device id to send, so without this bit it is indistinguishable from a
+         * lane that drives every plugin — and writing one back unchanged would convert it into
+         * that, discarding the original index and the reason, which are the only record of what
+         * the lane was for.
+         */
+        l.targetDisabled = (flags & 2) !== 0;
         // Nul-PADDED to 16, like every other name here: a 16-character id carries no
         // terminator, so the scan is bounded by the field.
         let name = '';
@@ -916,7 +929,8 @@ export function decode(buf, store) {
       }
       for (let i = have; i < store.automation.length; i++) {
         const l = store.automation[i];
-        l.track = 0; l.target = 0; l.points = 0; l.discrete = false; l.param = '';
+        l.track = 0; l.target = 0; l.points = 0; l.discrete = false;
+        l.targetDisabled = false; l.param = '';
       }
       store.automationCount = have;
     }

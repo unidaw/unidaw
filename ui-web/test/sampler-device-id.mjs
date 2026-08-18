@@ -9,7 +9,8 @@
  *
  * Reading the engine gives a candidate cause:
  *
- *   apps/device_chain.cpp:24    nextDeviceId() returns 0 for an EMPTY chain
+ *   apps/device_chain.cpp      the chain-local allocator returned 0 for an EMPTY chain
+ *                              (that function is gone; see the note at the assertion below)
  *   apps/daw_engine_main.cpp:2273   uint32_t samplerDeviceId = 0;  // 0 = this track has no sampler
  *   apps/daw_engine_main.cpp:5599   rt.samplerDeviceId = found->id;
  *
@@ -201,9 +202,11 @@ const ids = await page.evaluate(() => {
  * sent a note. The wire overloads it the same way — deviceId 0 on a command means "the first
  * sampler on this track" — so it was unaddressable by every command too.
  *
- * Backend fixed it engine-side (nextDeviceId starts at 1). The check inverts rather than being
- * deleted: what was the reproducer is now the regression guard, and it fails again the day
- * anything starts handing out zero.
+ * Backend fixed it engine-side, first by starting the chain-local allocator at 1 and since by
+ * removing that allocator entirely: ids come from the project's `next_device_id` watermark and
+ * `addDevice` REFUSES anything outside [1, 0x7FFF] (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME).
+ * The check inverts rather than being deleted: what was the reproducer is now the regression
+ * guard, and it fails again the day anything starts handing out zero.
  */
 check(ids[0] !== undefined && ids[0] !== 0,
       'a sampler on an EMPTY chain gets a real device id, not the no-device sentinel',

@@ -44,7 +44,8 @@ use crate::layout::{
     K_UI_MAX_AUTOMATION_POINTS, K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_DEVICE_PARAMS,
     K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES,
     K_UI_MAX_SCALE_STEPS, K_UI_MAX_TRACKS, K_UI_WAVEFORM_MAX_PAIRS, K_UI_WAVEFORM_SLOTS,
-    UI_AUTOMATION_FLAG_DISCRETE, UI_COMMAND_OUTCOME_COMPLETED, UI_COMMAND_OUTCOME_REASON_NONE,
+    UI_AUTOMATION_FLAG_DISCRETE, UI_AUTOMATION_FLAG_TARGET_DISABLED,
+    UI_COMMAND_OUTCOME_COMPLETED, UI_COMMAND_OUTCOME_REASON_NONE,
     UI_COMMAND_OUTCOME_REASON_STALE_BASE, UI_COMMAND_OUTCOME_REASON_UNKNOWN_TRACK,
     UI_COMMAND_OUTCOME_REFUSED, UI_COMMAND_OUTCOME_STATUS_NORMAL,
     UI_COMMAND_OUTCOME_STATUS_SEQUENCE_EXHAUSTED,
@@ -354,11 +355,22 @@ pub struct WaveformSlotView {
 #[derive(Debug, Clone, Default)]
 pub struct AutomationLaneView {
     pub track_id: u32,
-    /// `PARAM_TARGET_ALL` (0xFFFF_FFFF) = every plugin on the track.
+    /// `PARAM_TARGET_ALL` (0xFFFF_FFFF) = every plugin on the track; otherwise a project-global
+    /// stable DEVICE id. The field name is a leftover — see `automationTargetFromWire` in
+    /// apps/automation_target.h.
     pub target_plugin_index: u32,
     pub param_id: String,
     pub point_count: u32,
     pub discrete: bool,
+    /// THIS LANE DOES NOT DISPATCH. Its target is a legacy compact plugin index that no longer
+    /// identifies anything (AE-P1.2 G2-B item 18, R-PROJECT-TARGET-MIGRATION).
+    ///
+    /// READ IT BEFORE TRUSTING `target_plugin_index`. A disabled lane publishes the all-target
+    /// sentinel because it has no id to send, so without this flag it is indistinguishable from a
+    /// lane that drives every plugin — and a UI that reads a lane and writes it back unchanged
+    /// would convert one into the other, discarding the original index and the reason, which are
+    /// the only record of what the lane was for.
+    pub target_disabled: bool,
 }
 
 /// The whole lane list plus its version. `version` moves when ANY automation changes and is NOT
@@ -383,6 +395,8 @@ pub struct AutomationLaneAnswer {
     pub param_id: String,
     pub found: bool,
     pub discrete: bool,
+    /// This lane does not dispatch — see `AutomationLaneView::target_disabled`.
+    pub target_disabled: bool,
     pub points_truncated: u32,
     /// (nanotick, normalised 0..1), in tick order. The RESOLVED value between points is
     /// deliberately absent: interpolation is a picture, and a second implementation of it that
@@ -1627,6 +1641,7 @@ impl EngineHandle {
                     param_id: cchar_str(&lane.paramId),
                     point_count: lane.pointCount,
                     discrete: lane.flags & UI_AUTOMATION_FLAG_DISCRETE != 0,
+                    target_disabled: lane.flags & UI_AUTOMATION_FLAG_TARGET_DISABLED != 0,
                 });
             }
             fence(Ordering::Acquire);
@@ -1688,6 +1703,9 @@ impl EngineHandle {
                     param_id: cchar_str(&snap.paramId),
                     found: snap.found != 0,
                     discrete: snap.flags & UI_AUTOMATION_FLAG_DISCRETE != 0,
+                    // THE SAME FACT THE LIST PUBLISHES. Two views of one lane that disagree is how
+                    // a UI shows a disabled lane greyed in the header and editable in the editor.
+                    target_disabled: snap.flags & UI_AUTOMATION_FLAG_TARGET_DISABLED != 0,
                     points_truncated: snap.pointsTruncated,
                     points: snap.points[..n]
                         .iter()
