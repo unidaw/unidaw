@@ -1,5 +1,6 @@
 #include "apps/project_file.h"
 
+#include "apps/artifact_inventory.h"
 #include "apps/device_id_migration.h"
 
 #include "apps/sampler_serialize.h"
@@ -569,6 +570,22 @@ std::string serializeProject(const ProjectDocument& document) {
   // defaulting it to 1 would re-issue every one of them. `omitted is not zero` applies to a
   // watermark more sharply than to anything else here, because the failure is silent.
   writer.key("next_device_id", document.nextDeviceId);
+  // THE ARTIFACT INVENTORY. Written unconditionally, including the empty case: a schema-6 document
+  // without these is refused, because "no inventory" and "an inventory with nothing in it" are
+  // different claims and only the second is checkable. See apps/artifact_inventory.h.
+  writer.key("artifact_generation", document.artifactGeneration);
+  writer.beginArray("artifact_entries");
+  for (const auto& entry : document.artifactEntries) {
+    writer.beginArrayElement();
+    writer.key("track_id", entry.trackId);
+    writer.key("device_id", entry.globalDeviceId);
+    writer.key("kind", std::string(daw::artifactKindToString(entry.kind)));
+    writer.key("leaf", entry.leafName);
+    writer.key("size", entry.size);
+    writer.key("sha256", entry.sha256);
+    writer.endArrayElement();
+  }
+  writer.endArray();
   writer.beginChildObject("timebase");
   writer.key("nanoticks_per_quarter", document.nanoticksPerQuarter);
   writer.key("time_sig_numerator", document.songTimeSigNumerator);
@@ -1447,8 +1464,41 @@ bool deserializeProject(const std::string& json,
     // re-issue every one of them. Reading it as 0 makes validateGlobalDeviceIds refuse the
     // document by its own range rule rather than needing a second error message here.
     parsed.nextDeviceId = root.get<uint32_t>("next_device_id", 0);
+    // BOTH FIELDS ARE REQUIRED AT SCHEMA 6. A document with no inventory cannot say which files
+    // belong to it, and the only alternative — looking in the state directory — is the provenance
+    // -by-coincidence this record removes.
+    const auto generation = root.get_optional<std::string>("artifact_generation");
+    const auto entries = root.get_child_optional("artifact_entries");
+    if (!generation || !entries) {
+      setError(error, "schema 6 document has no artifact_generation/artifact_entries");
+      return false;
+    }
+    parsed.artifactGeneration = *generation;
+    for (const auto& item : *entries) {
+      daw::ArtifactEntry entry;
+      entry.trackId = item.second.get<uint32_t>("track_id", 0);
+      entry.globalDeviceId = item.second.get<uint32_t>("device_id", 0);
+      if (!daw::artifactKindFromString(item.second.get<std::string>("kind", ""), entry.kind)) {
+        setError(error, "unknown artifact kind in project");
+        return false;
+      }
+      entry.leafName = item.second.get<std::string>("leaf", "");
+      entry.size = item.second.get<uint64_t>("size", 0);
+      entry.sha256 = item.second.get<std::string>("sha256", "");
+      parsed.artifactEntries.push_back(std::move(entry));
+    }
   }
   if (!validateGlobalDeviceIds(parsed, error)) {
+    return false;
+  }
+  // A LEGACY DOCUMENT HAS NO INVENTORY YET — its artifacts are found through the retained
+  // LegacyArtifactKey and an inventory is built for it on the next save. So the empty inventory
+  // must carry the empty generation rather than an empty string, or the very next validation
+  // would refuse a document this loader just produced.
+  if (version <= kLastTrackScopedDeviceIdSchema) {
+    parsed.artifactGeneration = daw::artifactGenerationId(parsed.artifactEntries);
+  }
+  if (!daw::validateArtifactInventory(parsed, error)) {
     return false;
   }
 

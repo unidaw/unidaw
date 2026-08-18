@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "apps/artifact_inventory.h"
 #include "apps/automation_target.h"
 #include "apps/device_chain.h"
 #include "apps/project_file.h"
@@ -144,7 +145,14 @@ void danglingStableTargetIsRefused() {
 void schema6RefusesAnUntaggedOrMalformedTarget() {
   const auto refused = [](const std::string& lane, const std::string& what) {
     const std::string json =
-        "{ \"schema_version\": 6, \"next_device_id\": 5, \"tracks\": [ { \"track_id\": 0,"
+        "{ \"schema_version\": 6, \"next_device_id\": 5,"
+        // SCHEMA 6 REQUIRES AN INVENTORY, and a project with no plugin state has one — the
+        // digest of the canonical empty entry list. Spelled out because these fixtures are
+        // JSON TEXT rather than built documents; kEmptyGeneration is asserted against the
+        // engine's own value below so the literal cannot drift.
+        "  \"artifact_generation\": \"b61b112d85c528b5c3407889a216bcdbb2260580a786fb8dfe142991e75e2376\","
+        "  \"artifact_entries\": [],"
+        "  \"tracks\": [ { \"track_id\": 0,"
         "  \"device_chain\": [ { \"device_id\": 4, \"kind\": \"vst_effect\" } ],"
         "  \"automation\": [ { \"param_id\": \"cutoff\", " + lane +
         "    \"points\": [ { \"nanotick\": 0, \"value\": 0.5 } ] } ] } ] }";
@@ -170,7 +178,10 @@ void schema6RefusesAnUntaggedOrMalformedTarget() {
 
   // AND THE POSITIVE CONTROL, or every refusal above proves nothing.
   const std::string good =
-      "{ \"schema_version\": 6, \"next_device_id\": 5, \"tracks\": [ { \"track_id\": 0,"
+      "{ \"schema_version\": 6, \"next_device_id\": 5,"
+      "  \"artifact_generation\": \"b61b112d85c528b5c3407889a216bcdbb2260580a786fb8dfe142991e75e2376\","
+      "  \"artifact_entries\": [],"
+      "  \"tracks\": [ { \"track_id\": 0,"
       "  \"device_chain\": [ { \"device_id\": 4, \"kind\": \"vst_effect\" } ],"
       "  \"automation\": [ { \"param_id\": \"cutoff\","
       "    \"target\": { \"kind\": \"stable_device\", \"target_device_id\": 4 },"
@@ -217,6 +228,15 @@ void disabledTargetSurvivesTheRoundTrip() {
          "the original number specifically — it is the only record of what the lane meant");
   expect(daw::serializeProject(reopened) == saved,
          "and a second save must be byte-identical, or the file churns on every open");
+}
+
+// THE LITERAL ABOVE IS CHECKED AGAINST THE ENGINE. A hardcoded digest in a fixture is a second
+// statement of a rule, and the day the canonical form changes it would still look right — every
+// schema-6 fixture would start failing for a reason that reads like a document defect.
+void theEmptyGenerationLiteralMatchesTheEngine() {
+  expect(daw::artifactEmptyGenerationId() ==
+             "b61b112d85c528b5c3407889a216bcdbb2260580a786fb8dfe142991e75e2376",
+         "the empty-inventory digest changed; every schema-6 fixture in this file embeds it");
 }
 
 void wireValuesBecomeTargetsOrAreRefused() {
@@ -313,6 +333,7 @@ void hostedDeviceWalkSkipsWhatTakesNoSlot() {
 }  // namespace
 
 int main() {
+  theEmptyGenerationLiteralMatchesTheEngine();
   allTargetCarriesOver();
   concreteLegacyIndexIsDisabledNotGuessed();
   legacyDeviceIdBecomesStableDevice();

@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "apps/artifact_inventory.h"
 #include "apps/device_chain.h"
 #include "apps/stable_device_id.h"
 #include "apps/harmony_timeline.h"
@@ -319,6 +320,24 @@ struct ProjectDocument {
   // watermark only ever rises (DeviceIdWatermark::adopt takes the max), so stepping back over an
   // "add device" does not make its id available again to a later add.
   uint32_t nextDeviceId = kStableDeviceIdMin;
+  // THE PROJECT'S PLUGIN ARTIFACTS, named by this document rather than found on disk.
+  //
+  // AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME. `artifactGeneration` is the SHA-256 of
+  // `artifactEntries` in their sorted order, and the files live under
+  // `<state dir>/generations/<artifactGeneration>/`. Load resolves ONLY these entries and verifies
+  // every byte; it never enumerates the state directory, which is what makes a stale
+  // canonical-looking file unreachable instead of merely unlikely. See apps/artifact_inventory.h
+  // for why locating a blob by guessing its filename was provenance by coincidence.
+  //
+  // An EMPTY inventory still has a generation — the digest of the canonical empty list — so "this
+  // project has no plugin state" is a value rather than a missing field.
+  //
+  // DEFAULTS TO THE EMPTY GENERATION, not to an empty string. A default-constructed document is a
+  // project with no hosted plugins, which HAS an inventory — an empty one — and must validate
+  // without every producer remembering to stamp it. An empty string would make the common case
+  // the invalid one.
+  std::string artifactGeneration = artifactEmptyGenerationId();
+  std::vector<ArtifactEntry> artifactEntries;
 };
 
 // Schema version written into project.json. Bump on any incompatible change.

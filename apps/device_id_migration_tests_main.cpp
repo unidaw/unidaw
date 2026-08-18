@@ -425,6 +425,11 @@ void watermarkRoundTripsThroughTheDocument() {
 void schema6WithoutAWatermarkIsRefused() {
   const std::string json =
       "{ \"schema_version\": 6,"
+      // The inventory IS present, so the refusal below can only be about the watermark. A
+      // fixture missing two required fields would be refused for whichever the loader
+      // happened to check first, and the assertion would not know which.
+      "  \"artifact_generation\": \"b61b112d85c528b5c3407889a216bcdbb2260580a786fb8dfe142991e75e2376\","
+      "  \"artifact_entries\": [],"
       "  \"tracks\": [ { \"track_id\": 0,"
       "     \"device_chain\": [ { \"device_id\": 5, \"kind\": \"vst_effect\" } ] } ] }";
   daw::ProjectDocument document;

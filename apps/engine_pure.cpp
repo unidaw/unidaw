@@ -2,6 +2,8 @@
 // reader actually looks at; this file is the mechanics only.
 #include "apps/engine_pure.h"
 
+#include "apps/artifact_inventory.h"
+
 #include <algorithm>
 #include <filesystem>
 #include <cstring>
@@ -109,12 +111,19 @@ daw::UndoEntry invertUndoEntry(const daw::UndoEntry& entry) {
   return inverse;
 }
 
+// BOTH FORWARD TO daw::artifactLeafName, and neither spells the name itself any more.
+//
+// AE-P1.2 G2-B item 18 requires an inventory entry's `leafName` to EQUAL the filename helper. Two
+// places computing it is two rules that agree until somebody edits one — and the failure would be
+// an entry the load cannot resolve, reported as a missing artifact rather than as a naming
+// disagreement. These stay because the engine's save and load call them and the names read well
+// at those sites; what moved is the rule, not the interface.
 std::string pluginStateFileName(uint32_t trackId, uint32_t deviceId) {
-  return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".bin";
+  return daw::artifactLeafName(trackId, deviceId, daw::ArtifactKind::StateBlob);
 }
 
 std::string pluginParamsFileName(uint32_t trackId, uint32_t deviceId) {
-  return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".params.json";
+  return daw::artifactLeafName(trackId, deviceId, daw::ArtifactKind::ParameterManifest);
 }
 
 uint64_t clipContentEnd(const daw::MusicalClip& clip) {

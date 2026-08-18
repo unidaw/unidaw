@@ -138,6 +138,8 @@ add_library(engine_core STATIC
   apps/project_file.cpp
   apps/device_id_migration.cpp
   apps/automation_target.cpp
+  apps/artifact_inventory.cpp
+  apps/sha256.cpp
   apps/harmony_timeline.cpp
   apps/scale_library.cpp
   apps/ui_snapshot.cpp
@@ -360,6 +362,8 @@ add_executable(daw_lint
   apps/project_file.cpp
   apps/device_id_migration.cpp
   apps/automation_target.cpp
+  apps/artifact_inventory.cpp
+  apps/sha256.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -377,6 +381,8 @@ add_executable(project_file_tests
   apps/project_file.cpp
   apps/device_id_migration.cpp
   apps/automation_target.cpp
+  apps/artifact_inventory.cpp
+  apps/sha256.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -399,6 +405,8 @@ add_executable(device_id_migration_tests
   apps/project_file.cpp
   apps/device_id_migration.cpp
   apps/automation_target.cpp
+  apps/artifact_inventory.cpp
+  apps/sha256.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -421,6 +429,8 @@ add_executable(automation_target_tests
   apps/project_file.cpp
   apps/device_id_migration.cpp
   apps/automation_target.cpp
+  apps/artifact_inventory.cpp
+  apps/sha256.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -434,6 +444,12 @@ target_include_directories(automation_target_tests PRIVATE
 )
 
 target_link_libraries(automation_target_tests PRIVATE platform_juce)
+
+# SHA-256, checked against FIPS 180-4 vectors. No JUCE, no Boost — the artifact inventory needs a
+# digest in the pure document layer, and a hash verified only against itself cannot be wrong out
+# loud.
+add_executable(sha256_tests apps/sha256_tests_main.cpp apps/sha256.cpp)
+target_include_directories(sha256_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Header-only numeric tests for the waveform pyramid (no JUCE/Boost needed).
 add_executable(waveform_pyramid_tests
@@ -554,6 +570,8 @@ add_executable(placement_adds_tests
   apps/project_file.cpp
   apps/device_id_migration.cpp
   apps/automation_target.cpp
+  apps/artifact_inventory.cpp
+  apps/sha256.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -1037,6 +1055,11 @@ add_test(NAME automation_target
   COMMAND automation_target_tests
 )
 set_tests_properties(automation_target PROPERTIES TIMEOUT 120)
+
+add_test(NAME sha256
+  COMMAND sha256_tests
+)
+set_tests_properties(sha256 PROPERTIES TIMEOUT 120)
 
 add_test(NAME waveform_pyramid
   COMMAND waveform_pyramid_tests
