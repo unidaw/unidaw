@@ -6983,3 +6983,34 @@ in the script's PASS line. The code comment is where the next reader would actua
 Retracting a claim means finding every sentence that states it, which is a rule already in this
 ledger under a different name; what is new is that **the copy in the source outlives the copy in the
 document, and is the one that gets believed.**
+
+### A red gate that belonged to nobody
+
+The same suite run surfaced a second failure, `repository_integrity`, and it was **not** caused by
+this work: `docs/architecture/evidence/AE-P1.3-nonoverlap-542d8838.json` recorded
+
+    "working_directory": "/Users/jak/src/daw-ae-p1-3-nonoverlap-packet"
+
+— an absolute, machine-specific checkout path, committed in the frozen product base `92dfdfe2` as
+part of a **closed** item's evidence. It had been failing since before this item started.
+
+Two things made it worth fixing rather than reporting and stepping around.
+
+**The population was one.** Before touching a closed item's evidence I checked whether anything still
+*emits* that field — nothing does, so this is not a generator that would reproduce the defect on the
+next run — and whether any other artifact carries an absolute path — none does. Fixing one file
+therefore closes the class, which is the only condition under which fixing one file is the right
+move rather than the beginning of a list.
+
+**The redacted value was already recorded.** The field's evidentiary purpose is to say the control ran
+in the packet worktree rather than the product tree, and the packet's commit is named at line 6 of the
+same artifact. So the absolute path was carrying nothing the file did not already state, except the
+name of one machine. It now names the worktree by role and cites the commit already there; the JSON
+was re-parsed after the edit, and nothing digests the file's bytes, which was checked before editing
+rather than discovered afterwards.
+
+**Why this is worth a paragraph at all.** A red test that arrived from somewhere else is the easiest
+kind to leave: it is not yours, it is in someone else's closed work, and the change is in evidence
+rather than in code. That combination is exactly how a suite acquires permanent red — and this
+ledger already records what a permanently red suite does, which is become furniture. The check was
+right, the artifact was wrong, and the fix was four words long.
