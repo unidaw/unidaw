@@ -26,7 +26,7 @@ int main() {
 
   daw::TrackChain editChain = chain;
   daw::Device event;
-  event.id = daw::kDeviceIdAuto;
+  event.id = 1;
   event.kind = daw::DeviceKind::PatcherEvent;
   event.patcherNodeId = 0;
   event.capabilityMask = daw::DeviceCapabilityProducesMidi;
@@ -45,7 +45,7 @@ int main() {
   }
 
   daw::Device instrument0;
-  instrument0.id = daw::kDeviceIdAuto;
+  instrument0.id = 2;
   instrument0.kind = daw::DeviceKind::VstInstrument;
   instrument0.hostSlotIndex = 0;
   instrument0.capabilityMask =
@@ -57,7 +57,7 @@ int main() {
   }
 
   daw::Device fx0;
-  fx0.id = daw::kDeviceIdAuto;
+  fx0.id = 3;
   fx0.kind = daw::DeviceKind::VstEffect;
   fx0.hostSlotIndex = 1;
   fx0.capabilityMask = daw::DeviceCapabilityProcessesAudio;
@@ -66,7 +66,7 @@ int main() {
     return 1;
   }
   daw::Device fx;
-  fx.id = daw::kDeviceIdAuto;
+  fx.id = 4;
   fx.kind = daw::DeviceKind::VstEffect;
   fx.hostSlotIndex = 2;
   if (!require(daw::addDevice(editChain, fx, 1), "addDevice fx insert failed")) {
@@ -81,7 +81,7 @@ int main() {
   }
 
   daw::Device instrument;
-  instrument.id = daw::kDeviceIdAuto;
+  instrument.id = 5;
   instrument.kind = daw::DeviceKind::VstInstrument;
   instrument.hostSlotIndex = 3;
   if (!require(!daw::addDevice(editChain, instrument, daw::kDeviceIdAuto),
@@ -191,20 +191,59 @@ int main() {
     }
   }
 
+  // ---------------------------------------- addDevice no longer ALLOCATES an id
+  //
+  // AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME. This function used to answer `kDeviceIdAuto` by
+  // taking `max(existing)+1` over the chain, which is both TRACK-SCOPED (two tracks each got a
+  // device numbered 1) and REUSING (delete the highest and its number comes straight back). The
+  // caller brings a project-global id now, and every value that is not one is refused.
+  //
+  // WITHOUT THIS BLOCK the change is untested: the four sentinel values below all COMPILE, since
+  // the parameter is a plain uint32_t, so nothing but a run-time refusal can catch a caller that
+  // never updated. Each is checked separately rather than in one loop so a failure names which.
+  {
+    daw::TrackChain refuseChain;
+    // kParamTargetAll is NOT repeated here: it is the same 0xFFFFFFFF as kDeviceIdAuto, so
+    // listing it would test the same value twice and read as broader coverage than it is. Its
+    // own static_assert sits beside its definition in event_payloads.h.
+    const uint32_t refused[] = {daw::kDeviceIdAuto, 0u, daw::kStableDeviceIdMax + 1u};
+    for (uint32_t id : refused) {
+      daw::Device bad;
+      bad.id = id;
+      bad.kind = daw::DeviceKind::VstEffect;
+      if (!require(!daw::addDevice(refuseChain, bad, daw::kDeviceIdAuto),
+                   "addDevice accepted an id that is not a stable device identity")) {
+        return 1;
+      }
+    }
+    if (!require(refuseChain.devices.empty(),
+                 "a refused device must not end up in the chain")) {
+      return 1;
+    }
+    // AND THE BOUNDARY IS INCLUSIVE: 0x7FFF is the largest legal id, not the first illegal one.
+    daw::Device edge;
+    edge.id = daw::kStableDeviceIdMax;
+    edge.kind = daw::DeviceKind::VstEffect;
+    if (!require(daw::addDevice(refuseChain, edge, daw::kDeviceIdAuto),
+                 "addDevice refused the largest legal stable device id")) {
+      return 1;
+    }
+  }
+
   // ---------------------------------------- the shared instrument constructor
   {
-    const daw::Device made = daw::makeVstInstrumentDevice(7);
+    const daw::Device made = daw::makeVstInstrumentDevice(9, 7);
     // THE MASK COMES FROM THE SHARED RULE, not from a fourth hand-written copy. Three call sites
     // spelled this mask out by hand; an instrument that failed to declare ConsumesMidi would
     // still render, still appear in the chain, and silently receive no notes.
     if (!require(made.kind == daw::DeviceKind::VstInstrument && made.hostSlotIndex == 7 &&
-                     made.id == daw::kDeviceIdAuto &&
+                     made.id == 9 &&
                      made.capabilityMask ==
                          daw::capabilityMaskForKind(daw::DeviceKind::VstInstrument),
                  "makeVstInstrumentDevice does not match the shared capability rule")) {
       return 1;
     }
-    if (!require(daw::makeVstInstrumentDevice(daw::kHostSlotIndexDirect).hostSlotIndex ==
+    if (!require(daw::makeVstInstrumentDevice(9, daw::kHostSlotIndexDirect).hostSlotIndex ==
                      daw::kHostSlotIndexDirect,
                  "makeVstInstrumentDevice dropped the direct host slot")) {
       return 1;
@@ -218,7 +257,7 @@ int main() {
   {
     daw::TrackChain instChain;
     daw::Device s1;
-    s1.id = daw::kDeviceIdAuto;
+    s1.id = 1;
     s1.kind = daw::DeviceKind::Sampler;
     if (!require(daw::addDevice(instChain, s1, daw::kDeviceIdAuto),
                  "the first instrument should be accepted")) {
@@ -226,7 +265,7 @@ int main() {
     }
     // A second SAMPLER: only one is addressable.
     daw::Device s2;
-    s2.id = daw::kDeviceIdAuto;
+    s2.id = 2;
     s2.kind = daw::DeviceKind::Sampler;
     if (!require(!daw::addDevice(instChain, s2, daw::kDeviceIdAuto),
                  "a SECOND sampler must be refused")) {
@@ -234,7 +273,7 @@ int main() {
     }
     // A hosted synth NEXT TO a sampler: two instruments on one track.
     daw::Device vst;
-    vst.id = daw::kDeviceIdAuto;
+    vst.id = 3;
     vst.kind = daw::DeviceKind::VstInstrument;
     if (!require(!daw::addDevice(instChain, vst, daw::kDeviceIdAuto),
                  "a VST instrument alongside a sampler must be refused")) {
@@ -248,13 +287,13 @@ int main() {
     // not depend on which instrument arrived first.
     daw::TrackChain vstFirst;
     daw::Device v1;
-    v1.id = daw::kDeviceIdAuto;
+    v1.id = 1;
     v1.kind = daw::DeviceKind::VstInstrument;
     if (!require(daw::addDevice(vstFirst, v1, daw::kDeviceIdAuto), "vst first should be accepted")) {
       return 1;
     }
     daw::Device s3;
-    s3.id = daw::kDeviceIdAuto;
+    s3.id = 2;
     s3.kind = daw::DeviceKind::Sampler;
     if (!require(!daw::addDevice(vstFirst, s3, daw::kDeviceIdAuto),
                  "a sampler alongside a VST instrument must be refused")) {
@@ -262,7 +301,7 @@ int main() {
     }
     // EFFECTS ARE UNAFFECTED — the rule is about instruments, not about chain length.
     daw::Device fx;
-    fx.id = daw::kDeviceIdAuto;
+    fx.id = 4;
     fx.kind = daw::DeviceKind::VstEffect;
     if (!require(daw::addDevice(vstFirst, fx, daw::kDeviceIdAuto),
                  "an effect must still be accepted next to an instrument")) {

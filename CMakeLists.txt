@@ -136,6 +136,7 @@ add_library(engine_core STATIC
   apps/plugin_cache.cpp
   apps/event_log.cpp
   apps/project_file.cpp
+  apps/device_id_migration.cpp
   apps/harmony_timeline.cpp
   apps/scale_library.cpp
   apps/ui_snapshot.cpp
@@ -356,6 +357,7 @@ add_executable(daw_lint
   apps/daw_lint_main.cpp
   apps/event_log.cpp
   apps/project_file.cpp
+  apps/device_id_migration.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -371,6 +373,7 @@ add_executable(project_file_tests
   apps/project_file_tests_main.cpp
   apps/event_log.cpp
   apps/project_file.cpp
+  apps/device_id_migration.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -384,6 +387,27 @@ target_include_directories(project_file_tests PRIVATE
 )
 
 target_link_libraries(project_file_tests PRIVATE platform_juce)
+
+# AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME: project-global device ids, the migration that turns
+# a track-scoped document into one, and the watermark that stops an id being handed out twice.
+add_executable(device_id_migration_tests
+  apps/device_id_migration_tests_main.cpp
+  apps/event_log.cpp
+  apps/project_file.cpp
+  apps/device_id_migration.cpp
+  apps/device_chain.cpp
+  apps/plugin_cache.cpp
+  apps/patcher_preset.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+)
+
+target_include_directories(device_id_migration_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+
+target_link_libraries(device_id_migration_tests PRIVATE platform_juce)
 
 # Header-only numeric tests for the waveform pyramid (no JUCE/Boost needed).
 add_executable(waveform_pyramid_tests
@@ -502,6 +526,7 @@ target_include_directories(sampler_engine_tests PRIVATE
 add_executable(placement_adds_tests
   apps/placement_adds_tests_main.cpp
   apps/project_file.cpp
+  apps/device_id_migration.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -975,6 +1000,11 @@ add_test(NAME project_file_round_trip
   COMMAND project_file_tests ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects
 )
 set_tests_properties(project_file_round_trip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME device_id_migration
+  COMMAND device_id_migration_tests
+)
+set_tests_properties(device_id_migration PROPERTIES TIMEOUT 120)
 
 add_test(NAME waveform_pyramid
   COMMAND waveform_pyramid_tests

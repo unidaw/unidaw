@@ -308,7 +308,21 @@ void handleRequestWaveform(RequestCommandDeps& deps,
   // caused it rather than arriving anonymous.
   if ((req.flags & daw::kWaveformRequestSamplerSource) != 0) {
     flags |= daw::kUiWaveformFlagSamplerSource;
-    slot.samplerAddr = daw::packSamplerAddr(req.reserved0, req.reserved1);
+    // CHECKED, and the refusal is REPORTED rather than folded into the zero below. A zero
+    // samplerAddr with the sampler-source flag set says "this answer describes a sampler and I
+    // will not tell you which", which a reader files under the same cache key as every other
+    // unnameable one — the exact collision the flag exists to prevent. So a pair that cannot be
+    // packed clears the flag as well, and says so once.
+    uint32_t packed = 0;
+    if (daw::packSamplerAddr(req.reserved0, req.reserved1, packed)) {
+      slot.samplerAddr = packed;
+    } else {
+      DAW_EVENT("waveform.sampler_addr_unpackable")
+          .field("track", req.reserved0)
+          .field("device", req.reserved1);
+      flags &= ~daw::kUiWaveformFlagSamplerSource;
+      slot.samplerAddr = 0;
+    }
   } else {
     slot.samplerAddr = 0;
   }

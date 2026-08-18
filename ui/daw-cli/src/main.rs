@@ -677,15 +677,31 @@ fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 
 /// Encode `--device N` into the patcher payload's `flags`, which is where per-device addressing
 /// lives (the payload is exactly 40 bytes and full).
 ///
-/// Bit 15 marks the id as PRESENT and is not decoration: device ids start at 0, so a bare 0 cannot
-/// mean "unspecified". Without `--device` the command takes the legacy whole-pool path — which for
-/// a project with per-device graphs means the edit is applied to the shared pool and never saved,
-/// so pass it.
-fn patcher_device_flags(args: &[String]) -> u16 {
+/// Bit 15 marks the id as PRESENT, and it is not decoration — though its reason has changed. It
+/// used to be "device ids start at 0, so a bare 0 cannot mean unspecified"; zero is never a device
+/// identity now (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME). The bit stays because a caller
+/// sending flags=0 must keep reaching the legacy whole-pool path — a compatibility fact rather
+/// than a numbering one. Without `--device` the command takes that path, which for a project with
+/// per-device graphs means the edit lands on the shared pool and is never saved, so pass it.
+fn patcher_device_flags(args: &[String]) -> Result<u16, String> {
     use daw_bridge::layout as L;
     match flag_u64(args, "--device", None) {
-        Ok(id) => L::UI_PATCHER_FLAG_HAS_DEVICE_ID | ((id as u16) & L::UI_PATCHER_DEVICE_ID_MASK),
-        Err(_) => 0,
+        // REFUSED, NOT MASKED. This read `(id as u16) & UI_PATCHER_DEVICE_ID_MASK`, which is two
+        // silent truncations in a row: `--device 32768` arrived as device 0 WITH the presence bit
+        // set, and `--device 65537` arrived as device 1 — a different device that probably
+        // exists, edited instead of the one that was asked for, reporting success. The engine
+        // cannot tell those apart from a genuine request, which is why the refusal has to be here.
+        // AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME.
+        Ok(id) if L::is_stable_device_id(id) => {
+            Ok(L::UI_PATCHER_FLAG_HAS_DEVICE_ID | (id as u16))
+        }
+        Ok(id) => Err(format!(
+            "--device {id} is not a device id: ids are 1..={} (0 means no device)",
+            L::STABLE_DEVICE_ID_MAX
+        )),
+        // No --device at all is the legacy pool-scoped path, which is a different request rather
+        // than a malformed one.
+        Err(_) => Ok(0),
     }
 }
 
@@ -3506,7 +3522,11 @@ fn main() {
                 // cannot ride `sampler-slot --field`: that payload's `value` is an i32.
                 Some(&"sampler-slot-name") => {
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
-                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    // KEPT AS u64 UNTIL IT HAS BEEN CHECKED. Casting to u32 here and validating
+                    // afterwards moves the truncation one width along rather than removing it:
+                    // `--device 4294967297` becomes 1 before any guard can see it, and renames a
+                    // real sampler's slot. AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME.
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0);
                     let slot = flag_u64(&args, "--slot", Some(0)).unwrap_or(0) as u32;
                     // An ABSENT --name is an error; an EMPTY one is a legal rename to unnamed.
                     // Defaulting the missing case to "" would make a typo'd flag silently erase
@@ -3539,6 +3559,19 @@ fn main() {
                                 "daw-cli: name is {} bytes; the published field holds {} (the engine refuses rather than truncating)",
                                 n.len(),
                                 daw_bridge::layout::UI_SAMPLER_SLOT_NAME_BYTES - 1);
+                            2
+                        }
+                        // `device` is narrowed into a u16 field below. Zero is legal here and
+                        // means "the track's first sampler", which is this family's own
+                        // convention; anything else must be a real identity, because
+                        // `device as u16` turns 65537 into 1 and edits a different sampler
+                        // while reporting success (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME).
+                        Some(_) if device != 0
+                            && !daw_bridge::layout::is_stable_device_id(device) =>
+                        {
+                            eprintln!(
+                                "daw-cli: --device {device} is not a device id: ids are 1..={} (0 means the track's first sampler)",
+                                daw_bridge::layout::STABLE_DEVICE_ID_MAX);
                             2
                         }
                         Some(n) => {
@@ -4557,7 +4590,10 @@ fn main() {
                             UiCommandType::AddPatcherNode as u16
                         },
                         track_id: track,
-                        flags: patcher_device_flags(&args),
+                        flags: match patcher_device_flags(&args) {
+                            Ok(f) => f,
+                            Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                        },
                         node_id: flag_u64(&args, "--node", Some(0)).unwrap_or(0) as u32,
                         node_type,
                         ..Default::default()
@@ -4602,7 +4638,10 @@ fn main() {
                         // The sidecar sets these flags for every patcher edit including connect,
                         // so daw-cli was the only producer with the hole — a second copy agreeing
                         // on names and differing in behaviour.
-                        flags: patcher_device_flags(&args),
+                        flags: match patcher_device_flags(&args) {
+                            Ok(f) => f,
+                            Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                        },
                         track_id: track,
                         src_node_id: src,
                         dst_node_id: dst,
@@ -4645,7 +4684,10 @@ fn main() {
                         // which, since patcher-is-a-device, is not the graph anything renders.
                         // The other patcher verbs have carried this flag since #73; this one was
                         // never brought along, and it reported success the whole time.
-                        flags: patcher_device_flags(&args),
+                        flags: match patcher_device_flags(&args) {
+                            Ok(f) => f,
+                            Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                        },
                         track_id: track,
                         node_id: node,
                         config_type: node_type,

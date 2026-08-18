@@ -18,11 +18,17 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/identity_plugin.sh"
 . "$ROOT/tools/lib/engine_wait.sh"   # require_capture / capture_diagnosis
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
-IDENTITY="$BUILD/identity_plugin_artefacts/VST3/Identity.vst3"
+# WHERE THE BUNDLE IS, asked of tools/lib/identity_plugin.sh rather than typed. The flat
+# `identity_plugin_artefacts/VST3/` path this used to hardcode is a layout JUCE stopped
+# emitting long ago (tools/webstack.sh records the same finding); it survives only as a
+# leftover in build directories that were configured before the change, so on a FRESH
+# checkout this check bailed with "build identity_plugin first" and read as a regression.
+IDENTITY="$(resolve_identity_vst3 "$BUILD")" || IDENTITY="$BUILD/identity_plugin_artefacts/VST3/Identity.vst3"
 Q=960000
 INSERT_GAIN=0.5
 
@@ -39,6 +45,15 @@ w.writeframes(b''.join(struct.pack('<h', int(0.6*32767*math.sin(2*math.pi*440*i/
                        for i in range(sr*20)))
 w.close()
 PY
+# DEVICE ID 1, NOT 0, in the master chain below. Zero stopped being a device identity
+# (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME): a legacy zero is allocated a real id at load, so a
+# fixture written with 0 is renumbered under this check and the `set-bypass --device 0` further
+# down then names a device that does not exist — the bypass never toggles, both captures read the
+# same, and the ratio looks like a clean 1.00x from a run that tested nothing.
+#
+# (The note lives HERE and not beside the value: the value is inside a heredoc carrying JSON, and
+# a `#` line in there is not a comment — it is a syntax error in the document, which is exactly
+# how this check failed once already.)
 cat > "$TMP/lm.uniproj.json" <<EOF
 { "schema_version": 4, "meta": { "name": "lm" }, "nanoticks_per_quarter": $Q,
   "tempo_map": [ { "nanotick": 0, "bpm": 120 } ], "harmony_timeline": [],
@@ -53,7 +68,7 @@ cat > "$TMP/lm.uniproj.json" <<EOF
                         "notes": [], "chords": [], "mutes": [] } ] },
     { "track_id": 4294901760, "name": "Master", "is_master": true,
       "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
-      "device_chain": [ { "device_id": 0, "kind": "vst_effect", "capability_mask": 4,
+      "device_chain": [ { "device_id": 1, "kind": "vst_effect", "capability_mask": 4,
         "patcher_node_id": 4294967295, "host_slot_index": 4294967294, "bypass": false,
         "vst_ref": { "vendor": "daw", "name": "Identity", "path": "$IDENTITY", "uid16": "" } } ],
       "mod_links": [], "placements": [] } ] }
@@ -73,7 +88,7 @@ run() {  # run <extra-env> <name>
   after_command "$TMP" env DAW_UI_SHM_NAME="$shm" "$CLI" do load lm --force || true
   DAW_UI_SHM_NAME="$shm" "$CLI" do play --force >/dev/null 2>&1 || true
   sleep 6   # run ACTIVE long enough for the insert's gain to be measured
-  DAW_UI_SHM_NAME="$shm" "$CLI" do set-bypass --track master --device 0 --bypass 1 --force \
+  DAW_UI_SHM_NAME="$shm" "$CLI" do set-bypass --track master --device 1 --bypass 1 --force \
     >/dev/null 2>&1 || true
   wait "$eng" 2>/dev/null || true
   sleep 1

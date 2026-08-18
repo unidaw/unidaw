@@ -13,13 +13,54 @@
 
 namespace daw::engine {
 
+// POINT A TRACK AT AN INSTRUMENT, creating one if the chain has none.
+//
+// MOVED OUT OF main() VERBATIM. It was a lambda there, reached through a std::function member on
+// this very struct — so main() was holding a body whose only caller lives in this file, and the
+// tools/progress_check.sh ceiling on main() is what said so out loud when the body grew by ten
+// lines. It captured exactly two things, `engineState` and `rebuildHostForChain`, and
+// DeviceCommandDeps already carries both; the std::function member is gone with it.
+void updateTrackChainForInstrument(DeviceCommandDeps& deps, TrackRuntime& runtime,
+                                   uint32_t pluginIndex) {
+  auto& engineState = deps.engineState;
+  const auto& rebuildHostForChain = deps.rebuildHostForChain;
+  {
+    {
+      std::lock_guard<std::mutex> lock(runtime.trackMutex);
+      auto& devices = runtime.track.chain.devices;
+      auto it = std::find_if(devices.begin(), devices.end(),
+                             [&](const daw::Device& device) {
+                               return device.kind == daw::DeviceKind::VstInstrument;
+                             });
+      if (it == devices.end()) {
+        // ALLOCATED FROM THE PROJECT WATERMARK, not from this chain. A zero means the id space is
+        // exhausted, and addDevice would refuse it anyway — reporting here says WHY rather than
+        // leaving a silently instrument-less track.
+        const uint32_t stableId = engineState.deviceIdWatermark.allocate();
+        if (stableId == 0) {
+          daw::LogLine() << "Engine: device id space exhausted; cannot add instrument to track "
+                         << runtime.trackId << std::endl;
+        } else {
+          const daw::Device instrument =
+              daw::makeVstInstrumentDevice(stableId, pluginIndex);
+          daw::addDevice(runtime.track.chain, instrument, daw::kDeviceIdAuto);
+        }
+      } else {
+        it->hostSlotIndex = pluginIndex;
+        it->capabilityMask =
+            daw::capabilityMaskForKind(daw::DeviceKind::VstInstrument);
+      }
+    }
+    rebuildHostForChain(runtime);
+  }
+}
+
 void handleLoadPluginOnTrack(DeviceCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
   const auto& emitChainSnapshot = deps.emitChainSnapshot;
   const auto& ensureTrack = deps.ensureTrack;
   const auto& resolvePluginPath = deps.resolvePluginPath;
-  const auto& updateTrackChainForInstrument = deps.updateTrackChainForInstrument;
   {
   const uint32_t trackId = payload.trackId;
   const uint32_t pluginIndex = payload.pluginIndex;
@@ -29,7 +70,7 @@ void handleLoadPluginOnTrack(DeviceCommandDeps& deps,
     return;
   }
   if (auto* runtime = ensureTrack(trackId, *pluginPath)) {
-    updateTrackChainForInstrument(*runtime, pluginIndex);
+    updateTrackChainForInstrument(deps, *runtime, pluginIndex);
     emitChainSnapshot(*runtime);
     std::cout << "UI: loaded plugin on track " << trackId
               << " from " << *pluginPath << std::endl;

@@ -109,8 +109,11 @@ void tearDownHostState(TrackRuntime& runtime);
 //
 // So: remove a track that had a filter sweep and a mod link, add a track, and the new
 // track carries the deleted one's automation and a link naming device ids that no longer
-// exist — device ids restart per track, so the leftover link can end up modulating
-// whatever device now sits in that slot. Both are then written to disk by the next save.
+// exist. That USED to be able to modulate whatever device now sat in the slot, because device
+// ids restarted per track and were reused; they are project-global and never reissued now
+// (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME), so a leftover link dangles rather than
+// re-aiming. Dangling is still wrong — the save writes it, and a load refuses the document —
+// which is why this function still has to clear both.
 // Three copies of a list that has to stay complete is the bug; one function is the fix.
 void resetTrackContent(TrackRuntime& rt);
 

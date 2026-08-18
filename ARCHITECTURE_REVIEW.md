@@ -320,8 +320,10 @@ real, all nine are fixed, each with a negative control. Four were data loss.*
 - **A reused track slot inherited the dead track's automation and mod links.** Three paths
   repurpose a runtime and all three cleared the same four fields by hand while all three
   forgot the same two. Delete a track with a filter sweep and a mod link, add a track, and
-  the new lane carried both — and saved them. A leftover mod link names device ids that
-  restart per track, so it can modulate whatever now sits in that slot. One
+  the new lane carried both — and saved them. A leftover mod link named device ids that
+  restarted per track, so it could modulate whatever now sat in that slot; ids are
+  project-global and never reissued since AE-P1.2 G2-B item 18, so such a link now dangles
+  instead of re-aiming — still wrong, since the next load refuses the document. One
   `resetTrackContent` now wipes everything a track contains, and the load's "already blank"
   early-out no longer calls a slot blank while it still holds them.
 
@@ -368,7 +370,8 @@ what a reader trusts before reading anything under it.
 
 - **RESOLVED: the patcher's edit commands now address a DEVICE.** `--device D` on
   `patcher-node`/`patcher-unnode`/`patcher-connect`, carried in the payload's `flags` (bit 15
-  marks the id present — device ids start at 0, so a bare 0 cannot mean "unspecified"). The edit
+  marks the id present; that bit was introduced because device ids started at 0, and it stays for
+  compatibility now that zero is never a device identity — AE-P1.2 G2-B item 18). The edit
   goes into that device's own authored graph, is therefore saved, and the POOL IS RE-DERIVED
   immediately: assembly used to happen only at load, so even a correctly-addressed edit was inert
   until the next open. A pool that will not build is reported and the previous one keeps running.

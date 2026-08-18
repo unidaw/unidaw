@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "apps/patcher_abi.h"
+#include "apps/stable_device_id.h"
 #include "apps/patcher_graph.h"
 #include "apps/plugin_cache.h"
 #include "apps/sampler_state.h"
@@ -25,6 +26,13 @@ enum class DeviceKind : uint8_t {
 };
 
 constexpr uint32_t kDeviceIdAuto = 0xFFFFFFFFu;
+// NOT A DEVICE IDENTITY, and asserted here rather than remembered. `kDeviceIdAuto` means "pick
+// one" as an id and "append at the end" as an insert index; a stable device id is [1, 0x7FFF]
+// (apps/stable_device_id.h). If someone ever narrows this sentinel to fit a 16-bit carrier, the
+// two meanings collide and `isStableDeviceId(kDeviceIdAuto)` starts answering true — so the
+// assertion lives beside the value that would have to change, not in a comment somewhere else.
+static_assert(!isStableDeviceId(kDeviceIdAuto),
+              "kDeviceIdAuto must stay outside the stable device id range");
 constexpr uint32_t kHostSlotIndexDirect = 0xFFFFFFFEu;
 // UNRESOLVED: this device names a plugin that is not installed here. Distinct from Direct (the
 // engine's default plugin) and from a real cache index, and deliberately out of range so
@@ -145,11 +153,16 @@ uint8_t capabilityMaskForKind(DeviceKind kind);
 
 // A head-of-chain VST instrument, ready to hand to daw::addDevice.
 //
-// Three sites built this identically and differed only in hostSlotIndex — kDeviceIdAuto for the
-// id, VstInstrument for the kind, and the mask above. The mask is the part worth centralising:
-// an instrument that does not declare ConsumesMidi still renders, still shows in the chain, and
-// silently receives no notes.
-Device makeVstInstrumentDevice(uint32_t hostSlotIndex);
+// Three sites built this identically and differed only in hostSlotIndex — VstInstrument for the
+// kind and the mask above. The mask is the part worth centralising: an instrument that does not
+// declare ConsumesMidi still renders, still shows in the chain, and silently receives no notes.
+//
+// `stableDeviceId` IS A REQUIRED PARAMETER, and that is the point. This used to write
+// `kDeviceIdAuto` and let addDevice allocate a track-scoped id (AE-P1.2 G2-B item 18,
+// R-DEVICE-ID-LIFETIME). Adding the parameter is what makes every existing caller fail to
+// COMPILE until it says where its id came from — a run-time refusal would have let a caller keep
+// building an instrument nothing could add.
+Device makeVstInstrumentDevice(uint32_t stableDeviceId, uint32_t hostSlotIndex);
 
 // POINT ONE DEVICE AT THE PLUGIN IT SHOULD LOAD, in place, and report what matched.
 //

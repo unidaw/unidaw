@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "apps/engine_device_id_watermark.h"
 #include "engine_track_table.h"
 #include "engine_types.h"
 
@@ -27,6 +28,11 @@ struct TrackSetupDeps {
   const daw::HostConfig& baseConfig;
   std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
   std::function<std::optional<uint32_t>(const std::string&)> resolvePluginIndex;
+  // The default instrument this setup may install needs an id, and a device id is PROJECT-global
+  // now (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME) — so it cannot be derived from the chain
+  // being built. Last, because deps_order_check.sh compares the Nth argument's identifier to the
+  // Nth member and appending keeps every existing site's pairing intact.
+  DeviceIdWatermark& deviceIdWatermark;
 };
 
 struct ChildTrackDeps {

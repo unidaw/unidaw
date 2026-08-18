@@ -79,7 +79,7 @@ def routing():
     r = lambda k="none": {"kind": k, "track_id": 0, "input_id": 0}
     return {"midi_in": r(), "midi_out": r(), "audio_in": r(),
             "audio_out": r("master"), "pre_fader_send": True}
-dev = {"device_id": 0, "kind": "vst_instrument", "capability_mask": 5,
+dev = {"device_id": 1, "kind": "vst_instrument", "capability_mask": 5,
        "patcher_node_id": 0, "host_slot_index": DIRECT, "bypass": False,
        "vst_ref": {"vendor": "", "name": "identity", "path": "", "uid16": ""}}
 tr = {"track_id": 0, "name": "T", "harmony_quantize": False, "lines_per_beat": 4,
@@ -109,7 +109,7 @@ wait_for_boot "$TMP/eng.log" "$ENG" 80
 # which never matches (the array is "params"), so the poll timed out and the check failed —
 # a predicate that can never be true is as bad as one that is always true.
 params_ready() {
-  cli get device-params 0 0 2>/dev/null | python3 -c 'import json,sys
+  cli get device-params 0 1 2>/dev/null | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
 except Exception:
@@ -118,7 +118,7 @@ raise SystemExit(0 if d.get("params") else 1)'
 }
 wait_until 20 params_ready || true
 
-PARAMS="$(cli get device-params 0 0 2>/dev/null)"
+PARAMS="$(cli get device-params 0 1 2>/dev/null)"
 echo "$PARAMS" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null || \
   fail "get device-params did not return JSON:
         $(echo "$PARAMS" | head -3)"
@@ -174,7 +174,7 @@ echo "  discriminates: Mode is a 3-step switch, unautomatable, reading 'Off' —
 # ---- PERSISTS. The manifest lands beside the opaque blob.
 cli do save pmout --force >/dev/null 2>&1 || true
 sleep 1.8
-MANIFEST="$TMP/pmout.uniproj.state/t0_d0.params.json"
+MANIFEST="$TMP/pmout.uniproj.state/t0_d1.params.json"
 [ -f "$MANIFEST" ] || \
   fail "no parameter manifest at $MANIFEST. The state blob beside it is the plugin's private
         data and says nothing to anyone but the plugin — a project opened without this plugin

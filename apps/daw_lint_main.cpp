@@ -248,11 +248,9 @@ void checkTracks(const daw::ProjectDocument& doc) {
       ++masterCount;
       continue;
     }
-    if (!trackIds.insert(track.trackId).second) {
-      report(Severity::Error, "track-id-duplicate", trackScope(track),
-             "two tracks share this id; every per-track command addresses one of them "
-             "and the other is unreachable");
-    }
+    // NO track-id-duplicate RULE HERE ANY MORE. SUPERSEDED BY THE LOADER (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME). daw::deserializeProject now REFUSES this document — the linter never sees it, and a rule that cannot fire reads as coverage, which this file's own header calls worse than no rule. The report the user gets is strictly stronger than the one removed here: an error that stops the load, naming the same track/device.
+    // `trackIds` is still built, because the parent and routing rules below resolve against it.
+    trackIds.insert(track.trackId);
   }
   if (masterCount > 1) {
     report(Severity::Error, "master-duplicate", "global",
@@ -301,18 +299,11 @@ void checkTracks(const daw::ProjectDocument& doc) {
 void checkChains(const daw::ProjectDocument& doc) {
   for (const auto& track : doc.tracks) {
     const std::string scope = trackScope(track);
-    std::set<uint32_t> deviceIds;
     std::map<uint32_t, size_t> devicePos;
     for (size_t i = 0; i < track.chain.devices.size(); ++i) {
       const auto& device = track.chain.devices[i];
-      if (!deviceIds.insert(device.id).second) {
-        report(Severity::Error, "device-id-duplicate", scope,
-               "device id " + std::to_string(device.id) +
-                   " appears twice in this chain; chain edits and mod links address "
-                   "devices by id and will hit the wrong one");
-      } else {
-        devicePos[device.id] = i;
-      }
+      // NO device-id-duplicate RULE HERE ANY MORE. SUPERSEDED BY THE LOADER (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME). daw::deserializeProject now REFUSES this document — the linter never sees it, and a rule that cannot fire reads as coverage, which this file's own header calls worse than no rule. The report the user gets is strictly stronger than the one removed here: an error that stops the load, naming the same track/device.
+      devicePos[device.id] = i;
 
       const bool isPlugin = device.kind == daw::DeviceKind::VstInstrument ||
                             device.kind == daw::DeviceKind::VstEffect;
@@ -398,18 +389,9 @@ void checkChains(const daw::ProjectDocument& doc) {
       }
       auto srcIt = devicePos.find(link.source.deviceId);
       auto dstIt = devicePos.find(link.target.deviceId);
-      if (srcIt == devicePos.end()) {
-        report(Severity::Error, "modlink-device-missing", scope,
-               "mod link " + std::to_string(link.linkId) + " sources from device " +
-                   std::to_string(link.source.deviceId) +
-                   ", which is not in this chain; the engine refuses the link");
-      }
-      if (dstIt == devicePos.end()) {
-        report(Severity::Error, "modlink-device-missing", scope,
-               "mod link " + std::to_string(link.linkId) + " targets device " +
-                   std::to_string(link.target.deviceId) +
-                   ", which is not in this chain; the engine refuses the link");
-      }
+      // NO modlink-device-missing RULE HERE ANY MORE. SUPERSEDED BY THE LOADER (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME). daw::deserializeProject now REFUSES this document — the linter never sees it, and a rule that cannot fire reads as coverage, which this file's own header calls worse than no rule. The report the user gets is strictly stronger than the one removed here: an error that stops the load, naming the same track/device.
+      // The two lookups stay: the ordering rule below needs both positions, and it must not fire
+      // on a link whose ends it could not resolve.
       // Strictly backwards only. A device modulating ITSELF is legal and common with
       // per-device patchers; see the matching rule in the engine.
       if (srcIt != devicePos.end() && dstIt != devicePos.end() &&

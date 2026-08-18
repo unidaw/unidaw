@@ -5,6 +5,7 @@
 
 #include "apps/plugin_cache.h"
 #include "apps/device_chain.h"
+#include "apps/device_id_migration.h"
 #include "apps/project_file.h"
 
 namespace {
@@ -204,6 +205,15 @@ daw::ProjectDocument makeDocument() {
         {{0, daw::kPatcherEventOutputPort}, {1, daw::kPatcherEventInputPort},
          daw::PatcherPortKind::Event});
   }
+  // A HAND-BUILT DOCUMENT MUST STILL CARRY A WATERMARK THAT COVERS ITS OWN DEVICE IDS.
+  //
+  // AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME: schema 6 validates the project watermark before
+  // publication, and a device id at or above it is refused. This fixture writes ids 10, 11 and 20
+  // directly, so without this the round trip below fails at LOAD with "device id at or above the
+  // watermark" — which is the guard working, not a bug in it. The engine's own documents come
+  // from captureDocument, which stamps the live watermark and needs nothing here.
+  require(daw::raiseDeviceIdWatermark(document),
+          "makeDocument holds a device id no watermark can cover");
   return document;
 }
 
@@ -241,8 +251,13 @@ int main(int argc, char** argv) {
   const std::string first = daw::serializeProject(original);
   const std::string second = daw::serializeProject(original);
   require(first == second, "serialization is not deterministic");
-  require(first.find("\"schema_version\": 4") != std::string::npos,
-          "schema_version missing or not a number");
+  // ASKED OF THE AUTHORITY, not typed. This read `"schema_version": 4` literally, so bumping the
+  // schema failed here with "missing or not a number" — a message that names the wrong defect and
+  // sends the reader to the serializer. The property being tested is "the version is emitted as a
+  // bare number", and that survives every bump.
+  require(first.find("\"schema_version\": " +
+                     std::to_string(daw::projectSchemaVersion())) != std::string::npos,
+          "schema_version missing, quoted, or not the current version");
   // Numbers must not be quoted; anything else reading this file would have to
   // special-case string-wrapped integers.
   require(first.find("\"pitch\": 60") != std::string::npos,
@@ -1018,6 +1033,9 @@ int main(int argc, char** argv) {
 
     track.chain.devices.push_back(dev);
     doc.tracks.push_back(track);
+    // Same rule as makeDocument: a hand-built document sets its own watermark.
+    require(daw::raiseDeviceIdWatermark(doc),
+            "sampler round trip: a device id no watermark can cover");
 
     const std::string path = "/tmp/daw_sampler_roundtrip.uniproj.json";
     require(daw::saveProject(doc, path), "sampler round trip: save failed");

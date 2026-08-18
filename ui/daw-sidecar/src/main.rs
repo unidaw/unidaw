@@ -105,10 +105,19 @@ const K_UI_PATCHER_DEVICE_ID_MASK: u16 = 0x7FFF;
 /// carry it, the engine reads it identically for both, and a config that stayed pool-scoped
 /// while the add went to a device would tune a node that is not the one on screen.
 ///
-/// `None` keeps the LEGACY POOL PATH, which existing callers depend on: device ids start at 0,
-/// so a bare 0 cannot mean "unspecified" and the presence bit is what makes absence expressible.
+/// `None` keeps the LEGACY POOL PATH, which existing callers depend on: the presence bit is what
+/// makes absence expressible, so a caller sending flags=0 still reaches the shared pool.
+///
+/// A PRESENT ZERO IS REFUSED, and that is the part this used to get wrong. It accepted
+/// `{"device": 0}` and set the presence bit on a value that is not a device identity — zero is
+/// the ABSENCE of a device everywhere in this protocol (AE-P1.2 G2-B item 18,
+/// R-DEVICE-ID-LIFETIME), and the engine now refuses that combination as
+/// `device_id_not_an_identity`. daw-cli's twin of this function was corrected in the same change
+/// and this one was not, so the two copies of one addressing rule disagreed — which the paragraph
+/// above predicts happens to every copy eventually.
 fn patcher_edit_flags(body: &str) -> Result<u16, &'static str> {
     match parse_num(body, "\"device\"").filter(|d| *d >= 0) {
+        Some(0) => Err("device 0 is not a device id: omit \"device\" for the shared pool"),
         Some(d) if d <= K_UI_PATCHER_DEVICE_ID_MASK as i64 =>
             Ok(K_UI_PATCHER_FLAG_HAS_DEVICE_ID | (d as u16)),
         // Refused rather than masked: an id that wrapped would address a DIFFERENT device and
@@ -2901,9 +2910,11 @@ fn build_patcher_graph(body: &str) -> Option<Result<UiPatcherGraphCommandPayload
      * patcher device holding `nodes: 0`.
      *
      * The engine carries the id in `flags` because the payload is exactly 40 bytes and full:
-     * bit 15 says one is PRESENT and bits 0..14 are the id. The presence bit is not decoration
-     * — device ids start at 0, so a bare 0 cannot mean "unspecified", and without the bit every
-     * existing caller sending flags=0 would silently start addressing device 0.
+     * bit 15 says one is PRESENT and bits 0..14 are the id. The presence bit is not decoration,
+     * though its reason has changed: it used to be "device ids start at 0, so a bare 0 cannot
+     * mean unspecified", and zero is never a device identity now (AE-P1.2 G2-B item 18,
+     * R-DEVICE-ID-LIFETIME). The bit stays because without it every existing caller sending
+     * flags=0 would start addressing a device instead of the pool.
      *
      * Absent `device` therefore keeps the legacy pool path exactly as it was, which is what the
      * suites that drive the pool depend on.
@@ -3016,9 +3027,11 @@ fn device_kind(body: &str) -> Result<u32, &'static str> {
 /// SIZE first and dispatches on commandType second, so a chain edit in the
 /// generic shape is dropped without a word.
 ///
-/// The engine numbers the new device itself (`kChainDeviceIdAuto`) and appends
-/// it: an id chosen here would race every other writer on the ring, and there is
-/// no position to insert at until something can express one.
+/// The engine numbers the new device itself and appends it: an id chosen here would race every
+/// other writer on the ring, and there is no position to insert at until something can express
+/// one. `kChainDeviceIdAuto` is the spelling this builder uses to ask for that; a bare 0 is the
+/// other, and the engine honours both (apps/engine_chain_commands.cpp). Reading only the 0
+/// spelling once broke every add-device from this process, so the two are named together here.
 fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static str>> {
     // is_type, not `contains`: a project named "deldevice" would otherwise be
     // claimed by this builder — the same substring bug we fixed for the other
@@ -5495,16 +5508,30 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         if is_type(&t, "samplerslotname") {
                             let name = parse_str_value(&t, "\"name\"").unwrap_or("");
                             let bytes = name.as_bytes();
+                            // PARSED ONCE. The guard below and the header field beneath it used
+                            // to call parse_num separately — one fact derived twice, so a change
+                            // to either derivation could let a value be checked and a different
+                            // one sent. `.max(0)` keeps a negative reading as 0, which on this
+                            // carrier is the legal "the track's first sampler".
+                            let device = parse_num(&t, "\"device\"").unwrap_or(0).max(0);
                             let reply = if bytes.len() >= SAMPLER_SLOT_NAME_BYTES {
                                 format!(
                                     "{{\"error\":\"a slot name must be under {SAMPLER_SLOT_NAME_BYTES} \
                                       bytes and this is {} — the engine refuses rather than \
                                       shortening, so a longer one would change nothing\"}}",
                                     bytes.len())
+                            } else if device != 0
+                                && !daw_bridge::layout::is_stable_device_id(device as u64) {
+                                // NARROWED INTO A u16 BELOW, so it is checked first: `as u16`
+                                // turns 65537 into 1, which renames a DIFFERENT sampler's slot
+                                // and answers ok. AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME.
+                                format!(
+                                    "{{\"error\":\"device must be 1..={} (0 means the track's first sampler)\"}}",
+                                    daw_bridge::layout::STABLE_DEVICE_ID_MAX)
                             } else {
                                 let header = UiSamplerSlotNameHeader {
                                     command_type: UiCommandType::SamplerSetSlotName as u16,
-                                    device_id: parse_num(&t, "\"device\"").unwrap_or(0).max(0) as u16,
+                                    device_id: device as u16,
                                     track_id: parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32,
                                     slot_id: parse_num(&t, "\"slot\"").unwrap_or(0).max(0) as u16,
                                     name_bytes: bytes.len() as u16,
@@ -5827,15 +5854,29 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     .find(|n| n.id == p.node_id)
                                     .map(|n| n.owner_device_id)
                                     .unwrap_or(0);
-                                if owner != 0 {
-                                    p.flags = daw_bridge::layout::UI_PATCHER_FLAG_HAS_DEVICE_ID
-                                            | (owner & 0x7FFF);
-                                }
-                                match handle.send_patcher_config(p) {
-                                    Ok(()) => format!(
-                                        "{{\"ok\":true,\"type\":{},\"node\":{},\"device\":{}}}",
-                                        p.command_type, p.node_id, owner),
-                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                // MASKING WAS THE BUG, not the safety net it looks like. `owner`
+                                // comes back from SHM as a u16 the engine published; if it were
+                                // ever above 0x7FFF, `& 0x7FFF` would drop the top bit and send
+                                // the edit to a DIFFERENT device. The engine now narrows through a
+                                // checked conversion so that cannot happen — and this side asks
+                                // the same question rather than trusting it, because the two
+                                // processes are versioned separately.
+                                // AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME.
+                                if owner != 0 && !daw_bridge::layout::is_stable_device_id(owner as u64) {
+                                    format!(
+                                        "{{\"error\":\"published owner_device_id {owner} is not a device id (1..={})\"}}",
+                                        daw_bridge::layout::STABLE_DEVICE_ID_MAX)
+                                } else {
+                                    if owner != 0 {
+                                        p.flags = daw_bridge::layout::UI_PATCHER_FLAG_HAS_DEVICE_ID
+                                                | owner;
+                                    }
+                                    match handle.send_patcher_config(p) {
+                                        Ok(()) => format!(
+                                            "{{\"ok\":true,\"type\":{},\"node\":{},\"device\":{}}}",
+                                            p.command_type, p.node_id, owner),
+                                        Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                    }
                                 }
                                 },
                             };

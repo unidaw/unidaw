@@ -1,5 +1,7 @@
 #include "apps/project_file.h"
 
+#include "apps/device_id_migration.h"
+
 #include "apps/sampler_serialize.h"
 #include "apps/zip_container.h"
 
@@ -21,7 +23,17 @@
 namespace daw {
 namespace {
 
-constexpr uint32_t kProjectSchemaVersion = 4;
+// SCHEMA 6 — project-global device ids (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME).
+//
+// 5 IS SKIPPED DELIBERATELY. The frozen contract says the schema advances "4 to 6" and treats
+// "schema 1-5" as the one legacy range whose device ids are TRACK-SCOPED. Minting a real schema 5
+// here would put a document with GLOBAL ids inside that range, and the migration would then run
+// over a document that had already been migrated. The gap costs nothing and keeps the legacy
+// predicate (`version <= 5`) meaning exactly what the contract says it means.
+constexpr uint32_t kProjectSchemaVersion = 6;
+// The last schema that numbered devices per track. Everything at or below this is migrated on
+// load; above it, the document already carries global ids and a watermark.
+constexpr uint32_t kLastTrackScopedDeviceIdSchema = 5;
 
 void setError(std::string* error, const std::string& message) {
   if (error) {
@@ -551,6 +563,12 @@ std::string serializeProject(const ProjectDocument& document) {
   // Generation seed: every patcher generator folds this into its hash, so generated
   // material reproduces exactly, and changing this one number re-rolls every variation.
   writer.key("seed", document.seed);
+  // THE DEVICE-ID HIGH-WATER MARK. See ProjectDocument::nextDeviceId for why an id is never
+  // reused. Written UNCONDITIONALLY, unlike the optional arrays around it: a schema-6 document
+  // without it would have no way to say "this project has already spent ids 1..7", and a loader
+  // defaulting it to 1 would re-issue every one of them. `omitted is not zero` applies to a
+  // watermark more sharply than to anything else here, because the failure is silent.
+  writer.key("next_device_id", document.nextDeviceId);
   writer.beginChildObject("timebase");
   writer.key("nanoticks_per_quarter", document.nanoticksPerQuarter);
   writer.key("time_sig_numerator", document.songTimeSigNumerator);
@@ -880,7 +898,11 @@ std::string serializeProject(const ProjectDocument& document) {
 
 bool deserializeProject(const std::string& json,
                         ProjectDocument& document,
-                        std::string* error) {
+                        std::string* error,
+                        DeviceIdMigration* migration) {
+  if (migration != nullptr) {
+    *migration = DeviceIdMigration{};
+  }
   boost::property_tree::ptree root;
   try {
     std::istringstream stream(json);
@@ -1060,12 +1082,6 @@ bool deserializeProject(const std::string& json,
       }
 
       if (const auto chain = tree.get_child_optional("device_chain")) {
-        // Highest id already seen in this chain, so a repaired id cannot collide with a real one.
-        uint32_t nextLoadedDeviceId = 1;
-        for (const auto& deviceEntry : *chain) {
-          nextLoadedDeviceId = std::max(
-              nextLoadedDeviceId, deviceEntry.second.get<uint32_t>("device_id", 0) + 1);
-        }
         for (const auto& deviceEntry : *chain) {
           const auto& deviceTree = deviceEntry.second;
           Device device;
@@ -1075,21 +1091,26 @@ bool deserializeProject(const std::string& json,
             setError(error, "unknown device kind in project");
             return false;
           }
-          // A SAMPLER SAVED WITH ID 0 IS REPAIRED, and ONLY a sampler.
+          // THE SAMPLER ID-0 REPAIR IS GONE, and it had to go rather than be gated.
           //
-          // Zero means "no device" throughout the engine: TrackRuntime::samplerDeviceId is
-          // documented "0 = this track has no sampler" and guarded that way at nine sites, so a
-          // sampler with that id was never sent a note. Renumbering it is safe precisely BECAUSE
-          // it was silent — nothing can have come to depend on it.
+          // It read `device.id = nextLoadedDeviceId++`, a per-chain `max(existing)+1` — the exact
+          // construct AE-P1.2 G2-B item 18's R-DEVICE-ID-LIFETIME exists to delete, and
+          // apps/device_chain.cpp calls "the whole of the defect". Two things were wrong with
+          // leaving it here:
           //
-          // NOT done for other kinds, and the asymmetry is deliberate. A VST at id 0 worked fine,
-          // because nothing overloads its id as a sentinel; and mod_links reference devices BY
-          // ID, so renumbering a working device would break links pointing at it. Repairing what
-          // was broken and leaving alone what was not is the smaller claim, and the one that
-          // cannot lose data.
-          if (device.id == 0 && device.kind == DeviceKind::Sampler) {
-            device.id = nextLoadedDeviceId++;
-          }
+          //   * IT WAS NOT GATED BY SCHEMA. The migration below runs only for schema 1-5, but
+          //     this ran for every document — so on a SCHEMA-6 load it assigned an id BELOW the
+          //     project watermark, and every id below the watermark is by definition already
+          //     spent. It handed a live sampler a dead device's identity, and
+          //     validateGlobalDeviceIds could not see it because the id was in range and unique.
+          //   * IT SAT UPSTREAM OF THE VALIDATOR. Schema 6 must refuse device id 0 outright; the
+          //     repair laundered it into a legal-looking id before the check ran. A fail-open in
+          //     front of the checker is worse than no checker, because the checker reports PASS.
+          //
+          // Nothing is lost. For schema 1-5 the migration allocates a real global id for EVERY
+          // invalid id, samplers included, and does it from the project's own free space rather
+          // than from one chain. For schema 6 a zero is refused at load, which is what the
+          // contract says it is: "zero ... never a device identity".
           // ABSENT IS NOT ZERO HERE. A missing capability_mask used to default to 0, which is
           // DeviceCapabilityNone — a device that consumes no MIDI and processes no audio, i.e.
           // one that loads, appears in the chain, and is silently inert. Every project this
@@ -1304,7 +1325,17 @@ bool deserializeProject(const std::string& json,
         }
         if (!legacy.nodes.empty()) {
           Device patcherDev;
-          patcherDev.id = kDeviceIdAuto;  // addDevice assigns a fresh, unique id
+          // A TRACK-LOCAL ID, ON PURPOSE, and only because this runs DURING the parse of a
+          // schema<=3 document whose ids are still track-scoped. The global migration below
+          // renumbers it along with everything else, so what matters here is only that it does not
+          // collide within this chain. Named explicitly rather than passing kDeviceIdAuto, because
+          // addDevice no longer allocates and a reader must not think this is the live allocator.
+          patcherDev.id = kStableDeviceIdMin;
+          for (const auto& existing : track.chain.devices) {
+            if (existing.id >= patcherDev.id && existing.id < kStableDeviceIdMax) {
+              patcherDev.id = existing.id + 1u;
+            }
+          }
           patcherDev.kind = DeviceKind::PatcherEvent;
           patcherDev.capabilityMask = capabilityMaskForKind(DeviceKind::PatcherEvent);
           uint32_t outNode = 0;
@@ -1318,6 +1349,30 @@ bool deserializeProject(const std::string& json,
 
       parsed.tracks.push_back(std::move(track));
     }
+  }
+
+  // PROJECT-GLOBAL DEVICE IDENTITY, decided here because this is where a document ENTERS the
+  // engine. AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME.
+  //
+  // Schema 1-5 numbered devices per track, so the ids have to be rewritten before anything else
+  // reads them; schema 6 already carries global ids and its own watermark, and is only checked.
+  // BOTH paths then run the same validation — a migrated document is not trusted because the
+  // migration wrote it, which is the only way the migration's own bugs are visible.
+  DeviceIdMigration localMigration;
+  DeviceIdMigration& deviceIds = migration != nullptr ? *migration : localMigration;
+  if (version <= kLastTrackScopedDeviceIdSchema) {
+    if (!migrateTrackScopedDeviceIds(parsed, deviceIds, error)) {
+      return false;
+    }
+  } else {
+    // ABSENT IS NOT ZERO, and here it is not `kStableDeviceIdMin` either. A schema-6 document
+    // without a watermark cannot say which ids it has already spent, and defaulting to 1 would
+    // re-issue every one of them. Reading it as 0 makes validateGlobalDeviceIds refuse the
+    // document by its own range rule rather than needing a second error message here.
+    parsed.nextDeviceId = root.get<uint32_t>("next_device_id", 0);
+  }
+  if (!validateGlobalDeviceIds(parsed, error)) {
+    return false;
   }
 
   document = std::move(parsed);
@@ -1630,7 +1685,8 @@ bool saveProject(const ProjectDocument& document,
 
 bool loadProject(ProjectDocument& document,
                  const std::string& path,
-                 std::string* error) {
+                 std::string* error,
+                 DeviceIdMigration* migration) {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
     setError(error, "failed to open " + path);
@@ -1638,7 +1694,7 @@ bool loadProject(ProjectDocument& document,
   }
   std::ostringstream buffer;
   buffer << in.rdbuf();
-  return deserializeProject(buffer.str(), document, error);
+  return deserializeProject(buffer.str(), document, error, migration);
 }
 
 }  // namespace daw

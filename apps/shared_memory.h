@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "apps/event_id.h"
+#include "apps/stable_device_id.h"
 
 namespace daw {
 
@@ -184,7 +185,15 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //      drains it can hide a refusal from the CLI that sent the command. Outcomes instead live in
 //      a bounded sequence-addressed region with no consumer cursor: every observer scans from its
 //      own mark and either finds its exact command id or reports a precise indeterminate state.
-constexpr uint16_t kShmVersion = 41;
+// v42: DEVICE IDS BECAME PROJECT-GLOBAL (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME), and a
+//      later step in the same change gives ReplayComplete a payload gate. NOTHING MOVED AND
+//      NOTHING GREW in either case — which is exactly why the version has to move. Three
+//      carriers below keep their bytes and change their MEANING: UiPatcherNode::ownerDeviceId,
+//      the low half of packSamplerAddr, and kUiPatcherDeviceIdMask all named a device WITHIN A
+//      TRACK and now name one within the project. A reader built against v41 would parse every
+//      field correctly and attribute it to the wrong device, which is the failure mode a magic
+//      number cannot catch and a version can.
+constexpr uint16_t kShmVersion = 42;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -778,9 +787,15 @@ struct UiPatcherNode {
   // can set kUiPatcherFlagHasDeviceId on an edit, and without it EVERY patcher command from a UI
   // is pool-scoped, which since patcher-is-a-device is not the graph a project renders.
   //
-  // A u16 CAPS THIS AT 65535, where a device id is a u32 everywhere else. Device ids are minted
-  // per track from 1 upward, so reaching it needs 65k devices on one track; the publish site
-  // reports once if it ever does rather than truncating in silence.
+  // A u16 CARRIES THIS, and it is lossless BY CONSTRUCTION rather than by being roomy.
+  //
+  // This used to read "device ids are minted per track from 1 upward, so reaching 65535 needs 65k
+  // devices on one track" — an argument from unlikelihood, and it stopped being true when device
+  // ids became PROJECT-global (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME). The ceiling is now
+  // `kStableDeviceIdMax` = 0x7FFF, chosen as the narrowest lossless bound across every carrier in
+  // this repo, so a valid id always fits here. The publish site converts through
+  // `narrowStableDeviceId` and reports a value that does not fit rather than truncating; 0 stays
+  // "no owner", which is why a refused conversion may not fall back to it silently.
   uint16_t ownerDeviceId = 0;
   int32_t config[8]{};
 };
@@ -1348,8 +1363,39 @@ inline constexpr uint32_t kUiWaveformFlagPastEof = 1u << 0;
 // LOCAL id and `samplerAddr` names the track and device it belongs to. Clear on a store-id
 // answer, so a reader that does not know the bit sees exactly what it always saw.
 inline constexpr uint32_t kUiWaveformFlagSamplerSource = 1u << 1;
-inline constexpr uint32_t packSamplerAddr(uint32_t trackId, uint32_t deviceId) {
-  return (trackId << 16) | (deviceId & 0xffffu);
+// PACK A {track, device} PAIR INTO ONE u32, OR REFUSE.
+//
+// This used to return the packed value and mask the device half — `deviceId & 0xffffu` — which is
+// a silent narrowing: device 0x10001 packs as device 1, a different device that probably exists.
+// AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME: "Every narrowing producer and consumer of a 15-bit,
+// uint16, sampler-address, patcher-flag, or UI/control carrier validates before conversion and
+// never masks, wraps, or silently narrows."
+//
+// BOTH HALVES ARE CHECKED, not only the device. The track half is shifted left 16, so a track id
+// at or above 65536 loses its high bits the same way — and the MASTER track's id is 0xFFFF0000,
+// which shifts to exactly 0. A packed address of 0 is what "no sampler here" looks like, so the
+// old form turned the master track into the absence of one.
+//
+// Returns false and leaves `packed` untouched rather than producing a wrong address, so a caller
+// that ignores the result still cannot publish one.
+inline constexpr bool packSamplerAddr(uint32_t trackId, uint32_t deviceId, uint32_t& packed) {
+  // ZERO IS LEGAL HERE, and refusing it was a mistake worth naming. Every sampler command in this
+  // protocol reads deviceId 0 as "the track's first sampler" — daw-cli and the sidecar both
+  // DEFAULT to it — so the ordinary one-sampler request carries 0. Refusing it made the waveform
+  // answer drop its kUiWaveformFlagSamplerSource bit, and that bit is what tells the reader
+  // `sourceId` is a per-device local id rather than a store id: the answer came back to be read
+  // in the wrong id space, which is the collision the flag exists to prevent.
+  //
+  // So the predicate is "not a MISREADABLE value", not "is an identity": 0 packs as 0 and means
+  // what it has always meant, and anything else must be a real id.
+  if (deviceId != 0 && !isStableDeviceId(deviceId)) {
+    return false;
+  }
+  if (trackId > 0xFFFFu) {
+    return false;
+  }
+  packed = (trackId << 16) | deviceId;
+  return true;
 }
 
 struct alignas(64) UiWaveformRegion {

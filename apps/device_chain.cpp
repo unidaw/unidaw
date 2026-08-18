@@ -1,5 +1,7 @@
 #include "apps/device_chain.h"
 
+#include "apps/stable_device_id.h"
+
 #include <filesystem>
 #include <system_error>
 
@@ -39,29 +41,6 @@ bool hasInstrument(const TrackChain& chain) {
   return false;
 }
 
-// DEVICE IDS START AT 1. Zero is not an id, it is the ABSENCE of one.
-//
-// This started at 0, so the first device added to an empty chain got id 0 — and 0 is what
-// "there is no device" means everywhere else. TrackRuntime::samplerDeviceId is documented "0 =
-// this track has no sampler" and guarded that way at nine sites, so a sampler that was the FIRST
-// device on its track was never sent a note: the guards all read "no sampler here". The wire
-// protocol overloads it the same way — deviceId 0 on a command means "the first sampler on the
-// track, whichever that is" — so a device genuinely numbered 0 was unaddressable by every
-// command as well.
-//
-// That is the normal case, not a corner. `add-device --kind sampler` on a fresh track produces
-// exactly it, and so does the whole chop workflow. Every structural fact stayed correct
-// throughout — the kit published, the slots resolved, the notes emitted — and the instrument was
-// simply never played, which is why nothing here caught it and the web-UI agent found it from
-// the outside with a three-track differential.
-uint32_t nextDeviceId(const TrackChain& chain) {
-  uint32_t nextId = 1;
-  for (const auto& device : chain.devices) {
-    nextId = std::max(nextId, device.id + 1);
-  }
-  return nextId;
-}
-
 auto findDevice(TrackChain& chain, uint32_t deviceId) {
   return std::find_if(chain.devices.begin(), chain.devices.end(),
                       [&](const Device& device) { return device.id == deviceId; });
@@ -70,13 +49,22 @@ auto findDevice(TrackChain& chain, uint32_t deviceId) {
 }  // namespace
 
 bool addDevice(TrackChain& chain, Device device, uint32_t insertIndex) {
-  if (device.id == kDeviceIdAuto) {
-    device.id = nextDeviceId(chain);
-  } else {
-    for (const auto& existing : chain.devices) {
-      if (existing.id == device.id) {
-        return false;
-      }
+  // THE CALLER BRINGS THE ID. This function used to ALLOCATE one — `max(existing)+1` over this
+  // chain — and that single line is the whole of AE-P1.2 G2-B item 18's R-DEVICE-ID-LIFETIME
+  // defect: the id was TRACK-SCOPED, so two tracks each held a device numbered 1 and the id alone
+  // did not say which device it meant, and it was REUSED, because deleting the highest-numbered
+  // device made max+1 hand its number straight back out.
+  //
+  // Refusing here rather than deleting the parameter is deliberate: a chain is a document
+  // structure and has no access to the project's watermark, so the only correct thing it can do
+  // with `kDeviceIdAuto` is say no. The compiler cannot catch the old call — the value is a plain
+  // uint32_t — so the guard has to be a run-time refusal that every caller's own test sees.
+  if (!isStableDeviceId(device.id)) {
+    return false;
+  }
+  for (const auto& existing : chain.devices) {
+    if (existing.id == device.id) {
+      return false;
     }
   }
   if (isInstrumentKind(device.kind) && hasInstrument(chain)) {
@@ -196,9 +184,9 @@ uint8_t capabilityMaskForKind(DeviceKind kind) {
   return DeviceCapabilityNone;
 }
 
-Device makeVstInstrumentDevice(uint32_t hostSlotIndex) {
+Device makeVstInstrumentDevice(uint32_t stableDeviceId, uint32_t hostSlotIndex) {
   Device instrument;
-  instrument.id = kDeviceIdAuto;
+  instrument.id = stableDeviceId;
   instrument.kind = DeviceKind::VstInstrument;
   instrument.capabilityMask = capabilityMaskForKind(DeviceKind::VstInstrument);
   // Same rule as setDeviceHostSlotIndex: the index and the authored mode move together.

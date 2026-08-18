@@ -50,7 +50,17 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 // 14: the input plane gained an aux INPUT region (the last numAuxChannelsOut channels), so an
 // in-engine instrument's stems can reach the aux OUTPUT plane and become child tracks. The host
 // copies aux-in to aux-out before its plugins run.
-constexpr uint16_t kControlVersion = 14;
+// 15: advanced by AE-P1.2 G2-B item 18, and advanced EARLY on purpose. A LATER step of the same
+// change gives ReplayComplete a ReplayCompletePayload gate and turns
+// BlockMailbox.replayAckSampleTime into replayAckGate (R-CORRELATED-REPLAY-ACK); neither exists
+// in the tree yet. What has already changed is that device ids are project-global rather than
+// track-scoped, which alters what existing bytes MEAN without moving one of them.
+//
+// The bump leads the payload change rather than following it because the alternative is a window
+// in which meaning has changed under an unchanged marker — and a marker that is only correct at
+// the end of a multi-step change is not a marker. An old host paired with a new engine is refused
+// throughout, which is the outcome wanted in both halves.
+constexpr uint16_t kControlVersion = 15;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,

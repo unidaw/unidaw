@@ -3178,10 +3178,21 @@ fn sampler_slot_name(handle: &EngineHandle, args: &Value) -> ToolResult {
             "the name is {} bytes; the published field holds {} (the engine refuses rather than \
              truncating)", name.len(), L::UI_SAMPLER_SLOT_NAME_BYTES - 1));
     }
+    // CHECKED BEFORE THE CAST, not after. `device as u16` turns 65537 into 1 and renames a
+    // DIFFERENT sampler's slot while answering ok. Zero is legal here and means "the track's
+    // first sampler", which is this whole command family's convention.
+    // AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME. Two of the three producers of this header were
+    // fixed together and this was the third — the population was named as two.
+    let device = arg_u64(args, "device").unwrap_or(0);
+    if device != 0 && !L::is_stable_device_id(device) {
+        return ToolResult::err(format!(
+            "device {device} is not a device id: ids are 1..={} (0 means the track's first \
+             sampler)", L::STABLE_DEVICE_ID_MAX));
+    }
     let bytes = name.as_bytes();
     let header = L::UiSamplerSlotNameHeader {
         command_type: UiCommandType::SamplerSetSlotName as u16,
-        device_id: arg_u64(args, "device").unwrap_or(0) as u16,
+        device_id: device as u16,
         track_id: track as u32,
         slot_id: slot as u16,
         name_bytes: bytes.len() as u16,

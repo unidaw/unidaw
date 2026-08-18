@@ -110,20 +110,50 @@ expect() {
   fi
 }
 
+# THE DEFECTS THE LOADER NOW REFUSES OUTRIGHT — coverage MOVED, not deleted.
+#
+# AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME made an ambiguous track id, a duplicate device id
+# and a dangling mod link fail `daw::deserializeProject`, so `daw_lint` never sees the document
+# and its three matching rules were removed rather than left unable to fire. The same three broken
+# documents are still built here; what is asserted is that the parse is REFUSED and says why.
+#
+# WITHOUT THIS BLOCK the removal would look like three fewer things checked. It is the opposite —
+# the report went from a lint finding on a project that loads to an error that stops it.
+refuses() {
+  local what="$1" needle="$2" edit="$3"
+  sed "$edit" "$TMP/clean.uniproj.json" > "$TMP/broken.uniproj.json"
+  local out rc
+  out="$("$LINT" "$TMP/broken.uniproj.json" 2>&1)" && rc=0 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "  FAIL: $what — the document LOADED; the loader must refuse it"
+    fails=$((fails + 1))
+  elif ! echo "$out" | grep -q 'does not parse'; then
+    echo "  FAIL: $what — refused, but not as a parse refusal"
+    echo "$out" | sed 's/^/          /'
+    fails=$((fails + 1))
+  elif ! echo "$out" | grep -q "$needle"; then
+    echo "  FAIL: $what — refused without naming the defect (wanted: $needle)"
+    echo "$out" | sed 's/^/          /'
+    fails=$((fails + 1))
+  else
+    echo "  refused at load: $what"
+  fi
+}
+
 expect clip-missing            's/"clip_id": 1,/"clip_id": 99,/'
 expect placement-id-duplicate  's/"id": 2, "at": 0/"id": 1, "at": 0/'
 expect note-id-duplicate       's/"note_id": 2 }/"note_id": 1 }/'
 expect note-past-clip-end      's/"nanotick": 480000/"nanotick": 99999999/'
 expect note-zero-duration      's/"duration": 240000, "pitch": 64/"duration": 0, "pitch": 64/'
 expect note-overlap-in-column  's/"nanotick": 0, "duration": 240000/"nanotick": 0, "duration": 900000/'
-expect track-id-duplicate      's/"track_id": 1, "name": "B"/"track_id": 0, "name": "B"/'
+refuses "two tracks share an id" "ambiguous track id 0" 's/"track_id": 1, "name": "B"/"track_id": 0, "name": "B"/'
 expect routing-track-missing   's/"device_chain": \[\], "mod_links": \[\],/"routing": { "audio_out": { "kind": "track", "track_id": 77, "input_id": 0 } }, "device_chain": [], "mod_links": [],/'
-expect device-id-duplicate     's/"device_id": 6,/"device_id": 5,/'
+refuses "one chain holds a device id twice" "ambiguous device id" 's/"device_id": 6,/"device_id": 5,/'
 # Strictly backwards: device 6 (position 1) modulating device 5 (position 0). A device
 # modulating ITSELF is legal and must NOT fire — checked by the clean project, whose
 # link is 5 -> 6, and by the same-device case below.
 expect modlink-order           's/"device_id": 5, "kind": "patcher_event"/"device_id": 6, "kind": "patcher_event"/; s/"device_id": 6, "kind": "patcher_audio"/"device_id": 5, "kind": "patcher_audio"/'
-expect modlink-device-missing  's/"dst": { "device_id": 6,/"dst": { "device_id": 88,/'
+refuses "a mod link names a device that is not there" "dangling mod link target" 's/"dst": { "device_id": 6,/"dst": { "device_id": 88,/'
 expect quantize-inert          's/"strength_milli": 500/"strength_milli": 0/'
 expect tempo-map-no-origin     's/"nanotick": 0, "bpm": 120/"nanotick": 480000, "bpm": 120/'
 expect clip-unplaced           's/"clip_id": 2, "id": 2/"clip_id": 1, "id": 2/'

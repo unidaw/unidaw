@@ -1,0 +1,539 @@
+{
+  "schema": "ae-p1-2-g2b-implementation-steps-v1",
+  "ticket": "AE-P1.2-G2-B-item15+item18-implementation",
+  "owner": "backend",
+  "branch": "ae/p1-2-g2b-implementation",
+  "frozen_product": {
+    "commit": "92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8",
+    "tree": "238ac970b5d61fe16055ede4c43a2978ddb11da7"
+  },
+  "item15": {
+    "commit": "8ee5b3cdd34ef6c5538fac19074b4f442c0a8514",
+    "manifest_sha256": "a9583a4cb8a8fd45d1dc2ccfb683cf06f8758c55407bfdf6f3d5a424eea4465f",
+    "worktree": "../daw-ae-p1-2-g2b-item15-packet"
+  },
+  "item18": {
+    "commit": "34f0d7b3abe6918a3578b0c5852ee22476bd8a75",
+    "manifest_sha256": "4fcd463c3ca68c63f7100ae13874fe5620920b2ed76d0f1d4b905da1ec6a9a41",
+    "worktree": "../daw-ae-p1-2-g2b-item18-packet"
+  },
+  "atomicity": "The frozen contract is ONE change, not a sequence of independently shippable ones. Its records reference each other's constructs across the declared dependency graph in BOTH directions (R-DISPATCH-TICKET's ticket tuple names the sessionBlockTicket that R-TRANSACTIONAL-EVENT-BATCH introduces, while R-TRANSACTIONAL-EVENT-BATCH declares R-DISPATCH-TICKET as its dependency), so no partition of the records makes every step a state in which the whole contract is true. The steps below are therefore a BUILD ORDER for one atomic change, and every intermediate commit is a development state of that change. The branch is complete, and only then mergeable, when the completion_gate below is met.",
+  "steps": [
+    {
+      "n": 1,
+      "title": "Durable identity foundation and the protocol marker",
+      "detail": "Project-global stable device ids with a 0x7FFF ceiling and checked narrowing at every carrier; the live watermark and its two meeting points with the document (captureDocument stamps, applyDocument adopts); schema 6 with next_device_id; the schema 1-5 {trackId,oldDeviceId}->globalId migration map and its retained LegacyArtifactKeys; validation of an already-global document. Also bumps kControlVersion 14->15 and kShmVersion 41->42 in C++, Rust and SHM_LAYOUT.md.",
+      "protocol_bump_rationale": "R-PROTOCOL-VERSION fixes the VALUES (15 and 42) and states the reason as meaning changing under unmoved bytes. This step is the first that changes a meaning carried in SHM: UiPatcherNode.ownerDeviceId, packSamplerAddr's low half and kUiPatcherDeviceIdMask all stop being track-scoped. Bumping here rather than at the replay step means no commit on this branch ever ships changed SHM meaning under an unchanged version marker. The remaining meaning change the record names, the ReplayComplete payload gate, lands at step 6 under the same already-advanced marker."
+    },
+    {
+      "n": 2,
+      "title": "Schema-6 document completion",
+      "detail": "Tagged automation targets (All / StableDevice / DisabledLegacyCompact with its reason and original compact number); the immutable artifact generation, sorted per-entry digest inventory, the four-row presence matrix, the save commit order, schema-6 load, and module packaging from the verified inventory only. After this step a schema-6 document carries every field R-DEVICE-ID-LIFETIME and R-PROJECT-TARGET-MIGRATION require of it."
+    },
+    {
+      "n": 3,
+      "title": "Routing normalization and the 20-row matrix",
+      "detail": "The normalized directed routing graph, the exhaustive lane-by-kind matrix and its conflict rules, one-block-per-edge delivery, ascending {sourceTrackId,sourceBus,channel} fan-in, preFaderSend canonicalization, aux-child derivation, and the latency plan. Compiled INTO the snapshot revision at step 4."
+    },
+    {
+      "n": 4,
+      "title": "The session ExecutionSnapshot",
+      "detail": "One immutable session ExecutionSnapshot as the sole execution authority, its monotonic revision, the candidate-compile-validate-publish transaction under the command-thread writer lock, and removal of TrackStateSnapshot.chainDevices, TrackStateSnapshot.routing and routesToMaster as execution authorities. Installs the P-EXECUTION-AUTHORITY-CONSUMERS census and its scanner."
+    },
+    {
+      "n": 5,
+      "title": "Item-15 lock contract and bypass staging",
+      "detail": "The caller-held unique_lock capability, the immutable authored bypass plan captured before the controller lock, the single restart lock interval, hook-entry readiness false with exact per-slot staging witnesses, and failure withdrawing readiness plus disconnecting the possibly partial-frame stream under the same lock. Publishes readiness through one staged helper reached by all three old hostReady true paths."
+    },
+    {
+      "n": 6,
+      "title": "Dispatch protocol: ring batch atomicity, correlated replay, the mirror witness, the session block transaction, and both tickets",
+      "detail": "ringWriteBatch reserving a whole batch with one CAS and publishing the first reserved ready flag last; the ReplayCompletePayload gate and replayAckGate with the production no-JUCE receiver seam; the {dispatchTicket, mirrorEpoch, replayGate, causes, stage} witness with Unprimed/AwaitingAck/Complete/FailedPermanent; the {globalDeviceId, parameterUid16} mirror key; the two-phase SessionBlockPlan over every host event writer; and both tickets in one tuple. ONE STEP BECAUSE THE CONTRACT MAKES IT ONE: R-DISPATCH-TICKET's tuple names the sessionBlockTicket and mirror stage that R-TRANSACTIONAL-EVENT-BATCH and R-MIRROR-EPOCH introduce, while both of those records declare R-DISPATCH-TICKET as their dependency. No split of this cluster leaves a step in which any of its records is intact. Installs the P-DISPATCH-PROTOCOL-SURFACES census."
+    },
+    {
+      "n": 7,
+      "title": "Master correlation and the G4 witness",
+      "detail": "Master FX as a downstream participant of the same session block on the same dispatch helper and witness; the six-field handoff identity carried by TrackInfo, aux-child copies and master handoffs; and the producer transport and backpressure gates comparing all six. Retires masterFxActive as an execution authority, which is what lets the stale-authority scanner assert its complete forbidden set."
+    },
+    {
+      "n": 8,
+      "title": "Offline coordinator phases, the PASS-4 gate, and the production fixture",
+      "detail": "The explicit MappingReady / ControlPreroll / ResetAcknowledged / Playing / CountedOutput phases on the real runOfflinePump seam, stale-mapping rejection in both preflight readers, counted output accepted only on full identity match, and renderFailed with no partial output. Lands the PASS-4 replacement in the SAME step because its own statement ends 'makes offline rendering fail without output' while R-OFFLINE-PRIMER declares R-PASS4-REPLACEMENT as a dependency \u2014 the two are mutually referential. Lands the clock-free production fixture, the routing fixture over acyclic/cyclic/diamond graphs, the artifact fixture, and the separate coordinator fixture."
+    }
+  ],
+  "record_steps": {
+    "R-CALLER-HELD": 5,
+    "R-AUTHORED-PLAN": 5,
+    "R-SUPERSEDE-PASS3": 5,
+    "R-RESTART-ORDER": 5,
+    "R-FAILURE-WITHDRAWS": 5,
+    "D-DETERMINISTIC-SEAM": 5,
+    "DEP-ITEM16": 5,
+    "R-BYPASS-STAGED": 5,
+    "P-READINESS-PUBLISHERS": 5,
+    "P-SNAPSHOT-PUBLISHERS": 4,
+    "P-HOST-PLAN-MUTATIONS": 4,
+    "P-EXECUTION-AUTHORITY-CONSUMERS": 4,
+    "R-HOST-PLAN-AUTHORITY": 4,
+    "R-DEVICE-ID-LIFETIME": 4,
+    "R-STABLE-DEVICE-TARGETS": 4,
+    "R-ROUTING-AUTHORITY": 4,
+    "R-PROJECT-TARGET-MIGRATION": 4,
+    "P-DISPATCH-PROTOCOL-SURFACES": 6,
+    "R-ATOMIC-PRIMER-CAPACITY": 6,
+    "R-CORRELATED-REPLAY-ACK": 6,
+    "R-MIRROR-EPOCH": 6,
+    "R-MIRROR-INSTANCE-IDENTITY": 6,
+    "R-R13-RECONCILIATION": 6,
+    "D-PRODUCTION-RECEIVER": 6,
+    "R-PROTOCOL-VERSION": 6,
+    "R-DISPATCH-TICKET": 6,
+    "R-TRANSACTIONAL-EVENT-BATCH": 6,
+    "R-PASS4-REPLACEMENT": 8,
+    "R-MASTER-CORRELATION": 7,
+    "R-G4-WITNESS": 7,
+    "R-OFFLINE-PRIMER": 8,
+    "P-OFFLINE-OUTPUT-SURFACES": 8,
+    "D-PRODUCTION-FIXTURE": 8
+  },
+  "records_not_landed": {
+    "G-ITEM15": "packet gate \u2014 a statement ABOUT the packet's own review state, not a product behaviour",
+    "G-ITEM18": "packet gate \u2014 same",
+    "P-GOVERNED-FILES": "the item-15 packet's own governed bytes and their digests; nothing in the product implements it",
+    "R-NO-AUTHORIZATION": "pure authorization; discharged by item 18's dual PASS before this branch existed",
+    "R-REVIEW-GATED-AUTH": "pure authorization; discharged by the same dual PASS",
+    "DEP-PREDECESSOR": "pins an immutable input packet",
+    "DEP-FROZEN-BASE": "pins the frozen product commit this branch starts from",
+    "DEP-ITEM15": "pins item-15's dual-PASS rulings as inputs; the rulings themselves are landed individually at step 5",
+    "DEP-ITEM18": "item-15's record that item 18 blocked implementation; discharged by item 18's dual PASS",
+    "E-PROBE-CONFOUNDER": "an evidence classification of an existing probe, not a behaviour to implement",
+    "CTRL-PACKET": "the packet checker; re-run by the completion gate, not implemented in the product",
+    "CTRL-MUTATIONS": "the packet's mutation self-test; re-run by the completion gate"
+  },
+  "test_steps": {
+    "T-DEVICE-ID-LIFETIME": {
+      "step": 4,
+      "records": [
+        "R-DEVICE-ID-LIFETIME",
+        "R-HOST-PLAN-AUTHORITY"
+      ],
+      "why": "asserts candidates 'fail before publication without changing the prior snapshot', so it needs the snapshot publication transaction, not only the id rule"
+    },
+    "T-GLOBAL-DEVICE-IDENTITY": {
+      "step": 4,
+      "records": [
+        "R-DEVICE-ID-LIFETIME",
+        "R-STABLE-DEVICE-TARGETS",
+        "R-PROJECT-TARGET-MIGRATION"
+      ],
+      "why": "names 'plugin-state blob, and parameter-manifest identity' alongside automation and mirror identity, so it spans the id rule, the durable-target rule and the schema-6 target tag"
+    },
+    "T-PROJECT-TARGET-MIGRATION": {
+      "step": 4,
+      "records": [
+        "R-PROJECT-TARGET-MIGRATION",
+        "R-DEVICE-ID-LIFETIME"
+      ],
+      "why": "round-trips next_device_id, artifact_generation and artifact_entries together with the tagged targets"
+    },
+    "T-LEGACY-DISABLED-ROUNDTRIP": {
+      "step": 4,
+      "records": [
+        "R-PROJECT-TARGET-MIGRATION"
+      ],
+      "why": "old-load to schema-6-save to schema-6-load of a DisabledLegacyCompact tag"
+    },
+    "T-STATE-ARTIFACT-MIGRATION": {
+      "step": 4,
+      "records": [
+        "R-DEVICE-ID-LIFETIME"
+      ],
+      "why": "the artifact half of the id rule: legacy key read, generation commit, byte-identical restore"
+    },
+    "T-ARTIFACT-PRESENCE-MATRIX": {
+      "step": 4,
+      "records": [
+        "R-DEVICE-ID-LIFETIME"
+      ],
+      "why": "executes the four artifact_presence_matrix rows the id rule owns"
+    },
+    "T-ARTIFACT-PROVENANCE": {
+      "step": 4,
+      "records": [
+        "R-DEVICE-ID-LIFETIME"
+      ],
+      "why": "the stale-canonical-file negative path of the same rule"
+    },
+    "T-ROUTING-MATRIX": {
+      "step": 4,
+      "records": [
+        "R-ROUTING-AUTHORITY",
+        "R-HOST-PLAN-AUTHORITY"
+      ],
+      "why": "iterates the exact 5x4 matrix; validity is decided during candidate compilation, which is the snapshot transaction"
+    },
+    "T-ROUTING-BLOCK-DETERMINISM": {
+      "step": 4,
+      "records": [
+        "R-ROUTING-AUTHORITY",
+        "R-HOST-PLAN-AUTHORITY"
+      ],
+      "why": "asserts that reordering runtime storage or worker completion cannot change delivery, which is runtime behaviour reading the published graph rather than the normalizer alone"
+    },
+    "T-ROUTING-ATOMICITY": {
+      "step": 4,
+      "records": [
+        "R-ROUTING-AUTHORITY",
+        "R-HOST-PLAN-AUTHORITY"
+      ],
+      "why": "a mutation parked between candidate compilation and publication"
+    },
+    "T-PLAN-RACE": {
+      "step": 4,
+      "records": [
+        "R-HOST-PLAN-AUTHORITY",
+        "R-DEVICE-ID-LIFETIME",
+        "R-ROUTING-AUTHORITY"
+      ],
+      "why": "one publication switches the device map/watermark, routing, patcher ownership, automation tags and master together"
+    },
+    "T-STABLE-DEVICE-TARGETS": {
+      "step": 4,
+      "records": [
+        "R-STABLE-DEVICE-TARGETS",
+        "R-HOST-PLAN-AUTHORITY"
+      ],
+      "why": "plan-local compact indexes change while stable targets do not, which needs the plan to exist"
+    },
+    "T-LOCK-CAPABILITY": {
+      "step": 5,
+      "records": [
+        "R-CALLER-HELD",
+        "D-DETERMINISTIC-SEAM"
+      ],
+      "why": "the staging seam receives an owning unique_lock for the exact runtime mutex"
+    },
+    "T-RT-BEFORE-OFFLINE": {
+      "step": 5,
+      "records": [
+        "R-CALLER-HELD",
+        "D-DETERMINISTIC-SEAM"
+      ],
+      "why": "realtime try_lock reports failure before an offline blocking waiter acquires"
+    },
+    "T-STALE-PLAN": {
+      "step": 5,
+      "records": [
+        "R-AUTHORED-PLAN",
+        "R-HOST-PLAN-AUTHORITY"
+      ],
+      "why": "a changed plan identity prevents readiness publication for the stale plan"
+    },
+    "T-SEND-FAILURE": {
+      "step": 5,
+      "records": [
+        "R-FAILURE-WITHDRAWS",
+        "R-BYPASS-STAGED"
+      ],
+      "why": "partial-frame failure withdraws readiness and disconnects under the same lock"
+    },
+    "T-ORDER-CONTROL": {
+      "step": 5,
+      "records": [
+        "R-SUPERSEDE-PASS3",
+        "R-RESTART-ORDER",
+        "P-READINESS-PUBLISHERS"
+      ],
+      "why": "hook-entry readiness false, exact staging witnesses, readiness published only after them"
+    },
+    "T-OLD-GUARD-CONTROL": {
+      "step": 5,
+      "records": [
+        "R-SUPERSEDE-PASS3",
+        "DEP-ITEM16"
+      ],
+      "why": "restoring the old if-not-hostReady early return must delete every staging witness"
+    },
+    "T-EXACT-SLOTS": {
+      "step": 5,
+      "records": [
+        "R-BYPASS-STAGED",
+        "R-AUTHORED-PLAN",
+        "R-HOST-PLAN-AUTHORITY"
+      ],
+      "why": "BOTH manifests declare this id and their statements differ in population; the implementation lands both \u2014 item-15's 'per hosted VST slot and no attempt for non-host devices' AND item-18's 'per resolvable VST slot before the ticket publishes, non-VST topology produces no SetBypass, hostless aux produces neither'. Neither is assumed to contain the other"
+    },
+    "T-BATCH-VISIBILITY": {
+      "step": 6,
+      "records": [
+        "R-ATOMIC-PRIMER-CAPACITY"
+      ],
+      "why": "a consumer observes no batch entry until the first reserved ready flag publishes last"
+    },
+    "T-ACK-BOUNDARY": {
+      "step": 6,
+      "records": [
+        "R-CORRELATED-REPLAY-ACK",
+        "R-MIRROR-EPOCH"
+      ],
+      "why": "the exact gate transitions the same ticket/epoch to Complete, so the epoch must exist"
+    },
+    "T-RECEIVER-BOUND": {
+      "step": 6,
+      "records": [
+        "D-PRODUCTION-RECEIVER",
+        "R-ATOMIC-PRIMER-CAPACITY",
+        "R-CORRELATED-REPLAY-ACK"
+      ],
+      "why": "the real ringWriteBatch sender feeds the no-JUCE helper handleProcessBlock calls"
+    },
+    "T-PROTOCOL-VERSIONS": {
+      "step": 6,
+      "records": [
+        "R-PROTOCOL-VERSION",
+        "R-CORRELATED-REPLAY-ACK",
+        "R-DEVICE-ID-LIFETIME"
+      ],
+      "why": "asserts kControlVersion 15, kShmVersion 42, schema 6 fields, the payload/mailbox sizes AND that global id 0x7FFF is lossless"
+    },
+    "T-DUPLICATE-PLUGIN-MIRRORS": {
+      "step": 6,
+      "records": [
+        "R-MIRROR-INSTANCE-IDENTITY",
+        "R-MIRROR-EPOCH",
+        "R-ATOMIC-PRIMER-CAPACITY"
+      ],
+      "why": "each batch entry resolves to the correct track plan and distinct compact index before atomic reservation"
+    },
+    "T-PRIMER-CAPACITY": {
+      "step": 6,
+      "records": [
+        "R-ATOMIC-PRIMER-CAPACITY",
+        "R-TRANSACTIONAL-EVENT-BATCH"
+      ],
+      "why": "the transient-occupancy half follows R-TRANSACTIONAL-EVENT-BATCH's exact in-flight wait/retry rule by that record's own words, so it cannot close before the session transaction exists"
+    },
+    "T-COLD-REFUSES": {
+      "step": 6,
+      "records": [
+        "R-DISPATCH-TICKET"
+      ],
+      "why": "a zero dispatch ticket refuses every ProcessBlock and audio mapping read"
+    },
+    "T-ALL-PUBLISHERS": {
+      "step": 6,
+      "records": [
+        "P-READINESS-PUBLISHERS",
+        "R-DISPATCH-TICKET"
+      ],
+      "why": "each of the three hostReady paths reaches the one staged publication helper that publishes the ticket"
+    },
+    "T-BYPASS-FAILURE": {
+      "step": 6,
+      "records": [
+        "R-FAILURE-WITHDRAWS",
+        "R-DISPATCH-TICKET"
+      ],
+      "why": "asserts the ticket is left ZERO, which is the ticket's own state"
+    },
+    "T-LOWER-PRIMER": {
+      "step": 8,
+      "records": [
+        "R-PASS4-REPLACEMENT",
+        "R-MIRROR-EPOCH",
+        "R-ATOMIC-PRIMER-CAPACITY"
+      ],
+      "why": "ordinary work, active, track output and master processed output must all be absent, which is the PASS-4 gate"
+    },
+    "T-PRIMED-NOT-COMPLETE": {
+      "step": 8,
+      "records": [
+        "R-PASS4-REPLACEMENT",
+        "R-MIRROR-EPOCH"
+      ],
+      "why": "a second producer step emits neither a second primer nor an ordinary sentinel"
+    },
+    "T-REARM-REGRESSES": {
+      "step": 8,
+      "records": [
+        "R-MIRROR-EPOCH",
+        "R-PASS4-REPLACEMENT"
+      ],
+      "why": "overflow re-arm returns readiness to Unprimed and refuses the sentinel again"
+    },
+    "T-TRACK-LOCAL": {
+      "step": 8,
+      "records": [
+        "R-PASS4-REPLACEMENT",
+        "R-TRANSACTIONAL-EVENT-BATCH"
+      ],
+      "why": "a parked primer never joins or blocks the ordinary SessionBlockPlan"
+    },
+    "T-SESSION-BLOCK-ATOMIC": {
+      "step": 6,
+      "records": [
+        "R-TRANSACTIONAL-EVENT-BATCH",
+        "R-DISPATCH-TICKET"
+      ],
+      "why": "the two-phase protocol over two routed hosts"
+    },
+    "T-ORDINARY-BATCH-ATOMIC": {
+      "step": 6,
+      "records": [
+        "R-TRANSACTIONAL-EVENT-BATCH",
+        "R-ATOMIC-PRIMER-CAPACITY"
+      ],
+      "why": "every participant batch commits only inside the session two-phase protocol"
+    },
+    "T-NO-DRAIN-LEAK": {
+      "step": 8,
+      "records": [
+        "R-TRANSACTIONAL-EVENT-BATCH",
+        "R-PASS4-REPLACEMENT"
+      ],
+      "why": "transient occupancy never emits a drain ProcessBlock"
+    },
+    "T-ALL-EVENT-WRITERS": {
+      "step": 6,
+      "records": [
+        "R-TRANSACTIONAL-EVENT-BATCH",
+        "P-DISPATCH-PROTOCOL-SURFACES"
+      ],
+      "why": "all eight frozen ringWrite call sites classified, six migrated to staging"
+    },
+    "T-STALE-SNAPSHOT-AUTHORITY": {
+      "step": 7,
+      "records": [
+        "R-HOST-PLAN-AUTHORITY",
+        "R-MASTER-CORRELATION",
+        "P-EXECUTION-AUTHORITY-CONSUMERS"
+      ],
+      "why": "its forbidden set includes masterFxActive, which stays an execution authority until R-MASTER-CORRELATION retires it; asserting the set earlier would assert an incomplete set"
+    },
+    "T-MASTER-CORRELATION": {
+      "step": 7,
+      "records": [
+        "R-MASTER-CORRELATION",
+        "R-G4-WITNESS"
+      ],
+      "why": "restart or re-arm between processing and publication rejects the old handoff on the six-field identity"
+    },
+    "T-G4-WITNESS": {
+      "step": 7,
+      "records": [
+        "R-G4-WITNESS",
+        "R-MASTER-CORRELATION"
+      ],
+      "why": "TrackInfo, aux-child copies and master handoffs compare all six fields"
+    },
+    "T-PRODUCER-GATES": {
+      "step": 7,
+      "records": [
+        "R-G4-WITNESS",
+        "R-DISPATCH-TICKET",
+        "R-MIRROR-EPOCH"
+      ],
+      "why": "both producer gates compare the full tuple"
+    },
+    "T-CAPACITY-PERMANENT": {
+      "step": 8,
+      "records": [
+        "R-ATOMIC-PRIMER-CAPACITY",
+        "R-PASS4-REPLACEMENT",
+        "R-OFFLINE-PRIMER"
+      ],
+      "why": "asserts offline render terminates with renderFailed and no output, so the offline coordinator's terminal outcome must exist"
+    },
+    "T-ORDINARY-CAPACITY-PERMANENT": {
+      "step": 8,
+      "records": [
+        "R-TRANSACTIONAL-EVENT-BATCH",
+        "R-OFFLINE-PRIMER"
+      ],
+      "why": "same: 'makes offline rendering set renderFailed with zero partial output'"
+    },
+    "T-OFFLINE-NO-LEAK": {
+      "step": 8,
+      "records": [
+        "R-OFFLINE-PRIMER",
+        "P-OFFLINE-OUTPUT-SURFACES"
+      ],
+      "why": "the real coordinator completes pre-roll while stopped and produces tick-zero as counted block one"
+    },
+    "T-OFFLINE-PHASES": {
+      "step": 8,
+      "records": [
+        "R-OFFLINE-PRIMER",
+        "R-MASTER-CORRELATION",
+        "D-PRODUCTION-FIXTURE"
+      ],
+      "why": "refuses Playing before all track and master witnesses are Complete; driven by the separate coordinator fixture"
+    },
+    "T-MAPPING-PREFLIGHT": {
+      "step": 8,
+      "records": [
+        "R-OFFLINE-PRIMER"
+      ],
+      "why": "awaitAnyReadyTrack and awaitAllReadyTracks reject a stale mapping exactly as process and awaitNextBlock do"
+    }
+  },
+  "textual_edges": [
+    {
+      "from": "R-DISPATCH-TICKET",
+      "to": "R-TRANSACTIONAL-EVENT-BATCH",
+      "quote": "Each ordinary SessionBlockPlan also receives one nonzero monotonic sessionBlockTicket shared by all of its participants.",
+      "note": "the reverse of the declared edge; both records are therefore in the same step (6)"
+    },
+    {
+      "from": "R-DISPATCH-TICKET",
+      "to": "R-MIRROR-EPOCH",
+      "quote": "compare the same mapping/generation/host-ticket/session-ticket/revision plus mirror stage before using a host"
+    },
+    {
+      "from": "R-PASS4-REPLACEMENT",
+      "to": "R-OFFLINE-PRIMER",
+      "quote": "makes offline rendering fail without output",
+      "note": "R-OFFLINE-PRIMER declares R-PASS4-REPLACEMENT as a dependency while this statement asserts an offline outcome, so the two are mutually referential and share step 8"
+    },
+    {
+      "from": "R-PASS4-REPLACEMENT",
+      "to": "R-MASTER-CORRELATION",
+      "quote": "and master processed-output publication for that host until the exact witness is Complete"
+    },
+    {
+      "from": "R-ATOMIC-PRIMER-CAPACITY",
+      "to": "R-TRANSACTIONAL-EVENT-BATCH",
+      "quote": "Lesser N with transient occupancy follows R-TRANSACTIONAL-EVENT-BATCH's exact in-flight wait/retry rule and sends no drain.",
+      "note": "same direction as the declared edge; both in step 6"
+    },
+    {
+      "from": "R-CORRELATED-REPLAY-ACK",
+      "to": "R-MIRROR-EPOCH",
+      "quote": "binds it to the current ticket/epoch",
+      "note": "declared edge too; both in step 6"
+    },
+    {
+      "from": "R-ROUTING-AUTHORITY",
+      "to": "R-HOST-PLAN-AUTHORITY",
+      "quote": "A routing command mutates only a candidate document and atomically publishes the compiled graph",
+      "note": "the atomicity half is inseparable from the ruling, so the whole record lands at step 4 and step 3 is preparatory code inside the same branch rather than a record boundary"
+    }
+  ],
+  "completion_gate": [
+    "Every record in record_steps is landed intact; every record in records_not_landed is accounted for by its stated reason.",
+    "All 45 distinct test ids (39 item-18 + 7 item-15, T-EXACT-SLOTS shared and landed as BOTH statements) exist as executable tests and PASS.",
+    "cmake --build build is clean: grep -c 'error:' over the build log is 0.",
+    "The full ctest population PASSES unfiltered, with no exclusion filter, and the Rust suites pass.",
+    "python3 tools/architecture/ae_p1_2_g2b_item15_check.py still PASSES in the item-15 packet worktree, and its 16/16 mutations are still refused.",
+    "python3 tools/architecture/ae_p1_2_g2b_item18_check.py still PASSES in the item-18 packet worktree, with 33 records, 39 tests, 20 routing rows, 4 artifact presence rows, 89 governed files, 17 state-artifact sites, 100 gates and 118/118 mutation controls refused.",
+    "kControlVersion is 15 and kShmVersion is 42 in C++, Rust and SHM_LAYOUT.md together, and the existing size/offset assertions still hold.",
+    "The project schema is 6 and carries next_device_id, tagged automation targets, artifact_generation and artifact_entries."
+  ],
+  "per_step_gate": [
+    "cmake --build build is clean, checked as grep -c 'error:' == 0 on the build log, read before anything is committed.",
+    "The full ctest population PASSES with no new failure relative to the frozen baseline, and any pre-existing failure is named and attributed to the baseline by reproducing it in the frozen product worktree.",
+    "Every test the step map binds to THIS step passes. A test bound to a later step is not expected to exist yet and is not claimed to.",
+    "An independent sub-agent has reviewed the step's diff against the frozen records it touches."
+  ],
+  "worktree_note": "Paths below are RELATIVE TO THIS REPOSITORY'S PARENT DIRECTORY, never absolute. tools/repository_integrity_check.sh refuses committed content holding a user-specific checkout path, and it is right to: an absolute path is a fact about one machine, and this file is read on others."
+}

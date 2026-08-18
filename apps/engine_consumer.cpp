@@ -341,18 +341,32 @@ void writeUiPatcherTo(UiWriterDeps& deps, bool force) {
         break;
       }
       daw::UiPatcherNode& out = region->nodes[nodeCount++];
-      // The node's owning device, so a UI can name the graph an edit should reach. Reported
-      // rather than truncated if it ever exceeds the published half-word — see UiPatcherNode.
-      if (n.ownerDeviceId > 0xFFFFu) {
+      // The node's owning device, so a UI can name the graph an edit should reach. CHECKED
+      // rather than truncated — see UiPatcherNode, and apps/stable_device_id.h for the ceiling.
+      //
+      // THE OLD BOUND WAS 0xFFFF AND IT WAS THE WRONG ONE. A device id is [1, 0x7FFF] now
+      // (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME), because 0x7FFF is what
+      // kUiPatcherDeviceIdMask can carry BACK from a UI edit. An id in 0x8000..0xFFFF passed the
+      // old guard, published intact here, and then came back through that 15-bit mask as a
+      // different device — a round trip that loses the top bit in the return direction only.
+      // narrowStableDeviceId is the one predicate both directions ask.
+      // ZERO IS "NO OWNER", NOT "DOES NOT FIT" — and conflating them is a mistake this code made
+      // for exactly one test run. `narrowStableDeviceId` refuses 0 because 0 is not an IDENTITY,
+      // which is right for a producer that has a device in hand; here the field's own contract is
+      // that 0 means a pool node with no owning device, which is the legacy single-graph case and
+      // entirely normal. Reporting it as too wide fired a diagnostic on healthy input, which is
+      // how a warning stops being read.
+      uint16_t narrowedOwner = 0;
+      if (n.ownerDeviceId != 0 &&
+          !daw::narrowStableDeviceId(n.ownerDeviceId, narrowedOwner)) {
         if (!warnedPatcherOwnerTooWide.exchange(true, std::memory_order_relaxed)) {
           DAW_EVENT("patcher.owner_device_id_too_wide")
               .field("device", n.ownerDeviceId)
-              .field("published_max", 0xFFFFu);
+              .field("published_max", daw::kStableDeviceIdMax);
         }
-        out.ownerDeviceId = 0;
-      } else {
-        out.ownerDeviceId = static_cast<uint16_t>(n.ownerDeviceId);
+        narrowedOwner = 0;
       }
+      out.ownerDeviceId = narrowedOwner;
       out.id = n.id;
       out.type = static_cast<uint8_t>(n.type);
       out.hasConfig = 0;

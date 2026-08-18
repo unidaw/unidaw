@@ -182,9 +182,23 @@ int main() {
     expect(contains(v.compared, "seed"),
            "the generation seed is authored — a project that reloads with a different seed renders "
            "different notes from the same generators");
-    expect(v.ignored.empty(),
-           "nothing at document level is Derived or Session today; if that changes, the field "
-           "needs a comment here saying why undo must not restore it");
+    // EXACTLY ONE DOCUMENT-LEVEL FIELD IS UN-UNDOABLE, and it is named here so that a SECOND one
+    // cannot arrive quietly. This used to assert `v.ignored.empty()` with the instruction "if that
+    // changes, the field needs a comment here saying why undo must not restore it" — so here is
+    // that comment, and the assertion is now a fixed set rather than a fixed size.
+    //
+    // `next_device_id` is the project's device-id high-water mark (AE-P1.2 G2-B item 18,
+    // R-DEVICE-ID-LIFETIME). It is PERSISTED — a project must remember which ids it has spent —
+    // and it must never go backwards. Undo restoring a lower watermark makes a deleted device's
+    // id available again, and the replacement inherits its plugin-state blob, its parameter
+    // manifest and every automation lane pointed at it. So it is written, and it is not undone.
+    //
+    // A SET, NOT A COUNT: `ignored.size() == 1` would let a future field take this one's place
+    // without anyone noticing, which is the whole failure mode a ratchet is supposed to close.
+    expect(v.ignored.size() == 1 && contains(v.ignored, "next_device_id"),
+           "exactly one document-level field may be Derived or Session — next_device_id, the "
+           "device-id watermark. A new one needs a comment here saying why undo must not restore "
+           "it, and this assertion widened to name it");
   }
 
   if (failures != 0) {

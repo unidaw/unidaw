@@ -162,7 +162,11 @@ fn segments_live_edits_into_clips() {
     assert!(save.ok, "save failed: {save:?}");
 
     let doc = read_project(&engine.proj, "segout");
-    assert_eq!(doc["schema_version"].as_u64(), Some(4));
+    // ASKED OF WHAT THE ENGINE WRITES, not typed. This read `Some(4)` and failed the moment
+    // the schema advanced (AE-P1.2 G2-B item 18 takes it to 6) — with a message about the
+    // segmenter, which is not what broke. The property here is "a save round-trips at the
+    // CURRENT schema", and that survives every bump.
+    assert_eq!(doc["schema_version"].as_u64(), Some(daw_bridge::layout::PROJECT_SCHEMA_VERSION as u64));
     let clips = doc["clips"].as_array().unwrap();
     assert_eq!(clips.len(), 2, "expected two segmented clips: {clips:?}");
     let pls = track(&doc, 0)["placements"].as_array().unwrap().clone();
@@ -833,7 +837,10 @@ fn device_params_published_on_request() {
             "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
             "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
             "device_chain": [ {
-                "device_id": 0, "kind": "vst_effect", "patcher_node_id": 0, "bypass": false,
+                // DEVICE ID 1, NOT 0: zero is no longer a device identity, so a fixture
+                // written with 0 is renumbered at load and `req(0)` below would ask for a
+                // device that does not exist (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME).
+                "device_id": 1, "kind": "vst_effect", "patcher_node_id": 0, "bypass": false,
                 "vst_ref": { "vendor": "", "name": "Identity", "path": vst.to_str().unwrap(), "uid16": "" }
             } ],
             "mod_links": [], "placements": []
@@ -867,7 +874,7 @@ fn device_params_published_on_request() {
     };
     let deadline = Instant::now() + Duration::from_secs(20);
     let view = loop {
-        req(0);
+        req(1);
         let v = session.handle().read_device_params();
         if !v.params.is_empty() {
             break v;
@@ -882,7 +889,10 @@ fn device_params_published_on_request() {
 
     // The read-back is the requested device, with a real name and named params.
     assert_eq!(view.track_id, 0);
-    assert_eq!(view.device_id, 0);
+    // THE DEVICE THIS TEST ASKED FOR, which is 1 — the fixture above names it and req() requests
+    // it. This read `0` because the fixture used to, and zero stopped being a device identity
+    // (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME).
+    assert_eq!(view.device_id, 1);
     assert!(!view.device_name.is_empty(), "device name should be published");
     assert!(!view.params.is_empty(), "at least one parameter should be published");
     // Every published param carries a display name, a durable id, and an in-range
@@ -927,7 +937,8 @@ fn multi_bundle_selects_named_subplugin() {
             "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
             "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
             "device_chain": [ {
-                "device_id": 0, "kind": "vst_instrument", "patcher_node_id": 0,
+                // DEVICE ID 1, NOT 0 — same reason as devparams above.
+                "device_id": 1, "kind": "vst_instrument", "patcher_node_id": 0,
                 "host_slot_index": 0, "bypass": false,
                 "vst_ref": { "vendor": "u-he", "name": "Zebralette",
                              "path": bundle.to_str().unwrap(), "uid16": "" }
@@ -950,7 +961,8 @@ fn multi_bundle_selects_named_subplugin() {
             track_id: 0,
             plugin_index: 0,
             note_pitch: 0,
-            value0: 0,
+            // value0 is the DEVICE ID, and the fixture above now names 1 rather than 0.
+            value0: 1,
             note_nanotick_lo: 0,
             note_nanotick_hi: 0,
             note_duration_lo: 0,

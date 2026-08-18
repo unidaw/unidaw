@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # ZERO IS NOT A DEVICE ID. IT IS THE ABSENCE OF ONE.
 #
-# nextDeviceId() started at 0, so the first device added to an empty chain got id 0 — and 0 is
-# what "there is no device" means everywhere else in the engine. TrackRuntime::samplerDeviceId is
+# The chain-local allocator started at 0, so the first device added to an empty chain got id 0 —
+# and 0 is what "there is no device" means everywhere else in the engine. (That allocator is gone:
+# ids come from the project's next_device_id watermark now, and `addDevice` refuses anything
+# outside [1, 0x7FFF] — AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME. This check is what says the
+# property survived the move, which is the only reason it is still worth running.) TrackRuntime::samplerDeviceId is
 # documented "0 = this track has no sampler" and guarded that way at nine sites, so a sampler
 # that was the FIRST device on its track was never sent a note: every guard read "no sampler
 # here". The wire protocol overloads it identically — deviceId 0 on a command means "the first
@@ -193,7 +196,7 @@ done
 echo "  added to an empty chain: device id $ADDED"
 [ "$ADDED" != "0" ] || \
   fail "a sampler added to an EMPTY chain was given device id 0 — the same value that means
-        'this track has no sampler'. nextDeviceId() must start at 1: the guards cannot tell a
+        'this track has no sampler'. An allocated id must be >= 1: the guards cannot tell a
         real id 0 from an absent one, and this is the ordinary way a sampler gets made"
 
 echo "device_id_zero_check: PASS — zero is reserved, and a first-device sampler plays"

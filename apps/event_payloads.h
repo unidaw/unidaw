@@ -8,11 +8,20 @@
 // first, and broke juce_host_process, which did not — and that break went unnoticed because only
 // daw_engine was being rebuilt. Found by tools/contract_freshness_check.sh on its first run.
 #include "apps/event_id.h"
+#include "apps/stable_device_id.h"
 
 namespace daw {
 
 constexpr uint32_t kParamTargetAll = 0xFFFFFFFFu;
 constexpr uint32_t kChainDeviceIdAuto = 0xFFFFFFFFu;
+// NEITHER SENTINEL IS A DEVICE IDENTITY. Same reasoning as kDeviceIdAuto in device_chain.h: a
+// stable device id is [1, 0x7FFF], and these two say "every target" and "pick one". The
+// assertion sits beside the values so that narrowing either one to fit a carrier fails to
+// compile instead of quietly becoming a real device's number.
+static_assert(!isStableDeviceId(kParamTargetAll),
+              "kParamTargetAll must stay outside the stable device id range");
+static_assert(!isStableDeviceId(kChainDeviceIdAuto),
+              "kChainDeviceIdAuto must stay outside the stable device id range");
 
 struct MidiPayload {
   uint8_t status = 0;
@@ -2194,10 +2203,15 @@ static_assert(sizeof(UiModErrorPayload) == 40,
 
 // PER-DEVICE ADDRESSING, carried in `flags` because the payload is exactly 40 bytes and full.
 //
-// Bit 15 says a deviceId is PRESENT; bits 0-14 are the id. The presence bit is not decoration:
-// nextDeviceId() starts at 0, so device id 0 is a real device and a bare 0 cannot mean
-// "unspecified". Without the bit, every existing caller sending flags=0 would silently start
-// addressing device 0 instead of taking the legacy whole-pool path.
+// Bit 15 says a deviceId is PRESENT; bits 0-14 are the id, and 0x7FFF is exactly
+// `kStableDeviceIdMax` — this carrier is WHY the ceiling is 0x7FFF rather than something rounder.
+//
+// The presence bit is not decoration, and its reason has changed. It used to be "device id 0 is a
+// real device, so a bare 0 cannot mean unspecified"; zero is never a device identity now
+// (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME). The bit stays because without it every existing
+// caller sending flags=0 would start addressing a device instead of taking the legacy whole-pool
+// path — a compatibility fact, not a numbering one. Consumers still validate the 15 bits with
+// `isStableDeviceId` before use: the mask yields a number, not an identity.
 constexpr uint16_t kUiPatcherFlagHasDeviceId = 1u << 15;
 constexpr uint16_t kUiPatcherDeviceIdMask = 0x7FFFu;
 

@@ -68,14 +68,30 @@ std::unique_ptr<TrackRuntime> setupTrackRuntime(TrackSetupDeps& deps, uint32_t t
 
     runtime->track.chain = daw::defaultTrackChain();
     if (runtime->track.chain.devices.empty() && !trackPluginPath.empty()) {
+      // ONE ALLOCATION FOR BOTH BRANCHES, because both arms install an instrument and differ only
+      // in which plugin it names. (Allocating inside each arm would also be correct — only one
+      // arm runs — so this is for readability, not to avoid burning an id. An earlier version of
+      // this comment claimed otherwise and was simply wrong.)
+      //
+      // EXHAUSTION IS REPORTED, not swallowed. `allocate()` returns 0 when the project's id space
+      // is used up, addDevice refuses it, and without a word here the track would come up with no
+      // instrument and nothing to say why — which is NOT what an unresolvable plugin does: that
+      // takes the else arm and still installs one on kHostSlotIndexDirect.
+      const uint32_t stableId = deps.deviceIdWatermark.allocate();
+      if (stableId == 0) {
+        daw::LogLine() << "Engine: device id space exhausted; track " << trackId
+                       << " gets no default instrument" << std::endl;
+      }
       const auto pluginIndex = resolvePluginIndex(trackPluginPath);
-      if (pluginIndex) {
+      if (stableId == 0) {
+        // Nothing to install, and the log above said why.
+      } else if (pluginIndex) {
         const daw::Device instrument =
-            daw::makeVstInstrumentDevice(*pluginIndex);
+            daw::makeVstInstrumentDevice(stableId, *pluginIndex);
         daw::addDevice(runtime->track.chain, instrument, daw::kDeviceIdAuto);
       } else {
         const daw::Device instrument =
-            daw::makeVstInstrumentDevice(daw::kHostSlotIndexDirect);
+            daw::makeVstInstrumentDevice(stableId, daw::kHostSlotIndexDirect);
         daw::addDevice(runtime->track.chain, instrument, daw::kDeviceIdAuto);
         daw::LogLine() << "Engine: using direct host slot for default plugin path "
                   << trackPluginPath << std::endl;

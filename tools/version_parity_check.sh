@@ -49,6 +49,21 @@ PAIRS = [
     ('kShmVersion / K_SHM_VERSION',
      'apps/shared_memory.h',   r'constexpr\s+uint\d+_t\s+kShmVersion\s*=\s*(\d+)\s*;',
      'ui/daw-bridge/src/layout.rs', r'pub\s+const\s+K_SHM_VERSION\s*:\s*u\d+\s*=\s*(\d+)\s*;'),
+    # NOT A VERSION, AND IT BELONGS HERE ANYWAY. This table's property is "a constant re-typed by
+    # hand in another language is two facts that can disagree", and kStableDeviceIdMax is exactly
+    # that: 0x7FFF in apps/stable_device_id.h and again in ui/daw-bridge/src/layout.rs. Nothing
+    # else in this tree compares them, and a Rust half that drifted UP would let the CLI send an
+    # id the engine refuses, while one that drifted DOWN would refuse ids the engine issues.
+    ('kProjectSchemaVersion / PROJECT_SCHEMA_VERSION',
+     'apps/project_file.cpp',
+     r'constexpr\s+uint\d+_t\s+kProjectSchemaVersion\s*=\s*(\d+)\s*;',
+     'ui/daw-bridge/src/layout.rs',
+     r'pub\s+const\s+PROJECT_SCHEMA_VERSION\s*:\s*u\d+\s*=\s*(\d+)\s*;'),
+    ('kStableDeviceIdMax / STABLE_DEVICE_ID_MAX',
+     'apps/stable_device_id.h',
+     r'constexpr\s+uint\d+_t\s+kStableDeviceIdMax\s*=\s*0x([0-9A-Fa-f]+)u?\s*;',
+     'ui/daw-bridge/src/layout.rs',
+     r'pub\s+const\s+STABLE_DEVICE_ID_MAX\s*:\s*u\d+\s*=\s*0x([0-9A-Fa-f]+)\s*;'),
     ('kPatcherAbiVersion / PATCHER_ABI_VERSION',
      'apps/patcher_abi.h',     r'constexpr\s+uint\d+_t\s+kPatcherAbiVersion\s*=\s*(\d+)\s*;',
      'patcher_rust/src/lib.rs', r'pub\s+const\s+PATCHER_ABI_VERSION\s*:\s*u\d+\s*=\s*(\d+)\s*;'),
@@ -185,6 +200,43 @@ for name in sorted(cpp_consts):
             'add it to the table above. A mirrored constant nobody compares is the exact defect',
             'this file was written for, one constant along.')
 
+# ---- rule 5: a version RESTATED IN PROSE is a mirror too --------------------------------------
+#
+# SHM_LAYOUT.md now names both protocol versions, because a layout document that does not say which
+# protocol it describes is one you cannot date. That restatement is a THIRD copy of a number whose
+# whole problem is that copies drift — the same shape rules 1-4 exist to stop, one medium along, and
+# a doc is worse than code because nothing fails to build when it is wrong.
+#
+# So the doc is compared against the AUTHORITY enumerated by rule 3, not against a hardcoded value:
+# a table entry that names a constant rule 3 never found is itself a failure, so renaming the
+# constant cannot make this rule quietly stop looking.
+DOC_MIRRORS = [
+    ('kShmVersion', 'SHM_LAYOUT.md', r'`kShmVersion`[[:space:]]*=[[:space:]]*(\d+)'),
+    ('kControlVersion', 'SHM_LAYOUT.md', r'`kControlVersion`[[:space:]]*=[[:space:]]*(\d+)'),
+]
+doc_checked = 0
+for const, doc_rel, doc_re in DOC_MIRRORS:
+    if const not in cpp_consts:
+        bad(f'{const}: named by a DOC_MIRRORS entry but not found among the '
+            f'{len(cpp_consts)} k*Version constants rule 3 enumerated',
+            'the authority was renamed or reformatted, so this rule would compare nothing')
+        continue
+    doc_path = ROOT / doc_rel
+    if not doc_path.exists():
+        bad(f'{const}: {doc_rel} does not exist', 'the doc mirror cannot be compared')
+        continue
+    doc_hits = re.findall(doc_re.replace('[[:space:]]', r'\s'), doc_path.read_text())
+    if len(doc_hits) != 1:
+        bad(f'{const}: {doc_rel} states it {len(doc_hits)} times, expected exactly 1',
+            'zero means the doc stopped naming the version and this rule passes vacuously;',
+            'two means one of them can be wrong while the other reads correctly.')
+        continue
+    doc_checked += 1
+    if doc_hits[0] != cpp_consts[const]:
+        bad(f'DOC VERSION MISMATCH — {const}: {doc_rel} says {doc_hits[0]}, '
+            f'the authority says {cpp_consts[const]}',
+            'prose does not fail to compile when it is stale, which is why it is checked here.')
+
 for msg, detail in fail:
     print(f'  FAIL  {msg}')
     for d in detail:
@@ -196,6 +248,7 @@ vals = ', '.join(f'{l.split(" / ")[0]}={sole_value(c, cr, l)}' for l, c, cr, _, 
 head_note = (f'; {head_checked} pair(s) also verified as committed at HEAD'
              if head_checked else '; NOT verified at HEAD (no git history reachable)')
 print(f'  PASS  {checked} mirrored version constants agree across languages ({vals}); '
-      f'{len(cpp_consts)} k*Version constants scanned, no unguarded twin{head_note}')
+      f'{len(cpp_consts)} k*Version constants scanned, no unguarded twin{head_note}; '
+      f'{doc_checked} of {len(DOC_MIRRORS)} doc restatements agree with their authority')
 print('version_parity_check: PASS')
 PYEOF

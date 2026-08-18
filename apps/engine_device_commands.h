@@ -36,8 +36,13 @@ struct DeviceCommandDeps {
   std::function<void(TrackRuntime&)> emitChainSnapshot;
   std::function<TrackRuntime*(uint32_t, const std::string&)> ensureTrack;
   std::function<std::optional<std::string>(uint32_t)> resolvePluginPath;
-  std::function<void(TrackRuntime&, uint32_t)> updateTrackChainForInstrument;
 };
+
+// Its only caller is handleLoadPluginOnTrack, in the same translation unit — it is declared here
+// rather than left file-static because engine_device_commands_tests drives it directly, which is
+// what it could not do while the body was a lambda inside main().
+void updateTrackChainForInstrument(DeviceCommandDeps& deps, TrackRuntime& runtime,
+                                   uint32_t pluginIndex);
 
 void handleLoadPluginOnTrack(DeviceCommandDeps& deps,
             const daw::EventEntry& entry,

@@ -195,6 +195,7 @@ int main(int argc, char** argv) {
   size_t presetsRead = 0;
   size_t leavesTested = 0;
   size_t leavesSkipped = 0;
+  size_t leavesRefusedByLoader = 0;
   for (const std::string& path : presets) {
     daw::ProjectDocument original;
     std::string error;
@@ -285,7 +286,13 @@ int main(int argc, char** argv) {
       }
       daw::ProjectDocument other;
       if (!daw::deserializeProject(mutatedText, other, &error)) {
-        continue;  // the loader rejected it — tests the parser, not the comparer
+        // THE LOADER REJECTED IT — that tests the parser, not the comparer, so it is not a
+        // finding. But it IS lost coverage, and it must be counted or the run reports a total
+        // that quietly shrinks. Project-global device ids made this real: perturbing the highest
+        // `device_id` by +1 now lands at or above the watermark and perturbing a lower one
+        // collides, so both are refused where they used to be compared.
+        ++leavesRefusedByLoader;
+        continue;
       }
       // AND THE LOADER HAD TO KEEP THE CHANGE. A field the deserializer normalises away is not a
       // field the comparer failed to see, and counting it here would report the wrong component.
@@ -301,8 +308,8 @@ int main(int argc, char** argv) {
   }
 
   std::printf("  %zu preset(s), %zu mutated leaf/leaves compared, %zu skipped "
-              "(non-authored or normalised away)\n",
-              presetsRead, leavesTested, leavesSkipped);
+              "(non-authored or normalised away), %zu refused by the loader\n",
+              presetsRead, leavesTested, leavesSkipped, leavesRefusedByLoader);
 
   if (printBlind) {
     for (const std::string& name : blind) { std::printf("%s\n", name.c_str()); }

@@ -30,6 +30,7 @@
 #include "apps/engine_arrange_rail.h"
 #include "apps/engine_aux_child_overlays.h"
 #include "apps/engine_clip_window.h"
+#include "apps/engine_device_id_watermark.h"
 #include "apps/engine_document_history.h"
 #include "apps/engine_loaded_project.h"
 #include "apps/engine_patcher_graph_owner.h"
@@ -60,6 +61,11 @@ struct EngineState {
   // What has been loaded, and the window a client is currently asking to see of it.
   LoadedProject loadedProject;
   ClipWindow clipWindow;
+
+  // The project-global device-id high-water mark. Beside loadedProject because it is a property
+  // of the DOCUMENT rather than of any track — which is the whole change: it used to be computed
+  // per chain, so two tracks each numbered a device 1. See its own header.
+  DeviceIdWatermark deviceIdWatermark;
 
   // The patcher pool, assembled from the devices that reference it.
   PatcherGraphOwner patcherGraph;

@@ -120,6 +120,13 @@ daw::ProjectDocument captureDocument(SaveProjectDeps& deps) {
   const auto& trackIsPersisted = deps.trackIsPersisted;
   daw::ProjectDocument document;
     document.seed = projectSeed.load(std::memory_order_relaxed);
+    // STAMP THE LIVE DEVICE-ID WATERMARK. The other of exactly two places the document form and
+    // the live authority meet (the first is applyDocument, which adopts). Writing the ENGINE's
+    // mark rather than re-deriving `max(device id)+1` from the tracks below is the point: max+1
+    // over the surviving devices is precisely what hands a deleted device's id back out, and this
+    // function runs for every undo version as well as for every save, so a re-derivation here
+    // would undo the guarantee on the very path that has to preserve it.
+    document.nextDeviceId = deps.engineState.deviceIdWatermark.capture();
     {
       // LIVE state, so the save reads the ENGINE's copy — not whatever the document loaded with.
       // Writing the loaded value would silently discard every arrangement edit made this session,

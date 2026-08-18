@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "apps/device_chain.h"
+#include "apps/stable_device_id.h"
 #include "apps/harmony_timeline.h"
 #include "apps/modulation.h"
 #include "apps/automation_clip.h"
@@ -17,6 +18,10 @@
 #include "apps/track_routing.h"
 
 namespace daw {
+
+// Defined in apps/device_id_migration.h, which includes THIS header — so it is named here rather
+// than included, and only by pointer.
+struct DeviceIdMigration;
 
 // The `kind` string a device serialises as. Declared here rather than left TU-local because
 // diagnostics elsewhere need to NAME a device's kind, and a second switch over DeviceKind is
@@ -293,6 +298,27 @@ struct ProjectDocument {
   // Project-level clip library, referenced by track placements by id.
   std::vector<ProjectClip> clips;
   std::vector<ProjectTrack> tracks;
+  // THE PROJECT'S DEVICE-ID HIGH-WATER MARK — the id the next allocation would take.
+  //
+  // AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME. Device ids are PROJECT-GLOBAL, and an id is never
+  // reused: delete the only device on a track and the next one added gets a new number, not the
+  // dead one's. That is what makes an id a durable name — automation, mirrors, plugin-state blobs,
+  // parameter manifests, meters, modulation, sampler and patcher ownership all key on it across
+  // save/load, and a reused id would silently hand a deleted device's state to its replacement.
+  //
+  // A WATERMARK RATHER THAN max(existing)+1 for exactly that reason: max+1 over the surviving
+  // devices is what the old track-scoped allocator did, and it hands out a deleted id the moment
+  // the highest-numbered device goes away.
+  //
+  // PERSISTED, because the guarantee is about the PROJECT and not about one session. It is one
+  // value past the largest id in the document, so `kStableDeviceIdExhausted` (0x8000) means the
+  // space is used up — and validateGlobalDeviceIds refuses any device id at or above it, which is
+  // what stops a hand-edited file from claiming an id the next allocation would also hand out.
+  //
+  // NOT LOWERED BY UNDO. The document field travels with the version, but the engine's live
+  // watermark only ever rises (DeviceIdWatermark::adopt takes the max), so stepping back over an
+  // "add device" does not make its id available again to a later add.
+  uint32_t nextDeviceId = kStableDeviceIdMin;
 };
 
 // Schema version written into project.json. Bump on any incompatible change.
@@ -302,9 +328,17 @@ uint32_t projectSchemaVersion();
 // record per line where practical, so successive saves of an unchanged
 // document are byte-identical and a musical change reads as a small diff.
 std::string serializeProject(const ProjectDocument& document);
+
+// `migration` receives the schema 1-5 -> project-global device-id rewrite that this parse
+// performed, when one was needed. It is an OUTPUT rather than a side effect because the plugin
+// state blob and parameter manifest of a migrated device still live under its OLD
+// {trackId, oldDeviceId} name on disk, and only this map says what that name was — see
+// DeviceIdMigration::legacyArtifactKeys. A schema-6 document needs no rewrite and leaves
+// `migrated` false.
 bool deserializeProject(const std::string& json,
                         ProjectDocument& document,
-                        std::string* error = nullptr);
+                        std::string* error = nullptr,
+                        DeviceIdMigration* migration = nullptr);
 
 // Writes atomically: a temp file beside the target, then rename, so an
 // interrupted save can never truncate an existing project.
@@ -354,8 +388,13 @@ bool loadProjectModule(ProjectDocument& document,
 bool saveProject(const ProjectDocument& document,
                  const std::string& path,
                  std::string* error = nullptr);
+// `migration` is the same output deserializeProject produces — see there. A caller that restores
+// plugin state MUST take it: a device whose id the migration changed still has its state blob and
+// parameter manifest on disk under the OLD {trackId, oldDeviceId} name, and only this map says
+// what that name was.
 bool loadProject(ProjectDocument& document,
                  const std::string& path,
-                 std::string* error = nullptr);
+                 std::string* error = nullptr,
+                 DeviceIdMigration* migration = nullptr);
 
 }  // namespace daw

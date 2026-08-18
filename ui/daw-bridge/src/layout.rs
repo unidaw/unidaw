@@ -4,7 +4,15 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 41;
+pub const K_SHM_VERSION: u16 = 42;
+
+/// The project-document schema the engine WRITES. Mirrors `kProjectSchemaVersion` in
+/// `apps/project_file.cpp`; the pair is compared by `tools/version_parity_check.sh`.
+///
+/// It exists so a Rust test can assert "a save round-trips at the current schema" without typing
+/// the number — an assertion spelled `Some(4)` failed the moment the schema advanced, and did it
+/// with a message about the segmenter rather than about the schema.
+pub const PROJECT_SCHEMA_VERSION: u32 = 6;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -671,7 +679,11 @@ pub struct UiPatcherNode {
     /// needs before it can set `UI_PATCHER_FLAG_HAS_DEVICE_ID` on an edit; without it every
     /// patcher command is pool-scoped, and the pool is not what a project renders.
     ///
-    /// Capped at 65535 by the half-word; the engine reports once rather than truncating.
+    /// Carried losslessly BY CONSTRUCTION: a device id is at most `STABLE_DEVICE_ID_MAX`
+    /// (0x7FFF), so it always fits. This used to say "capped at 65535 by the half-word", which
+    /// was an argument from roominess and stopped being the rule when ids went project-global.
+    /// The engine converts through a checked narrowing and reports a value that does not fit
+    /// rather than truncating; 0 still means "no owner".
     pub owner_device_id: u16,
     pub config: [i32; 8],
 }
@@ -1464,11 +1476,33 @@ pub fn clip_appearances(extents: &[UiClipExtent]) -> std::collections::HashMap<u
 
 /// Per-device addressing for the patcher graph commands, carried in the payload's `flags`
 /// because the payload is exactly 40 bytes and full. Bit 15 marks the id PRESENT; bits 0-14 are
-/// the id. The presence bit matters: device ids start at 0, so a bare 0 cannot mean
-/// "unspecified", and without the bit every caller sending flags=0 would silently start
-/// addressing device 0 instead of the legacy shared pool.
+/// the id, and 0x7FFF is exactly `STABLE_DEVICE_ID_MAX` — this carrier is WHY the ceiling is
+/// 0x7FFF. The presence bit matters, though its reason has changed: it used to be "device ids
+/// start at 0, so a bare 0 cannot mean unspecified", and zero is never a device identity now
+/// (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME). The bit stays because without it every caller
+/// sending flags=0 would start addressing a device instead of the legacy shared pool — a
+/// compatibility fact rather than a numbering one.
 pub const UI_PATCHER_FLAG_HAS_DEVICE_ID: u16 = 1 << 15;
 pub const UI_PATCHER_DEVICE_ID_MASK: u16 = 0x7FFF;
+
+/// The largest project-global stable device id. Mirrors `kStableDeviceIdMax` in
+/// `apps/stable_device_id.h`; the pair is compared by `tools/version_parity_check.sh`.
+///
+/// 0x7FFF is not a round number chosen for comfort — it is the NARROWEST lossless bound across
+/// every carrier that names a device, and `UI_PATCHER_DEVICE_ID_MASK` directly above is the
+/// carrier that sets it. AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME.
+pub const STABLE_DEVICE_ID_MAX: u32 = 0x7FFF;
+
+/// Is this a device IDENTITY? Zero is the absence of a device everywhere in this protocol, so it
+/// is not one — which is why `UI_PATCHER_FLAG_HAS_DEVICE_ID` exists rather than a bare zero
+/// meaning "unspecified".
+///
+/// Takes u64 so a value parsed from a command line or a JSON body is checked BEFORE it is cast:
+/// `id as u16 & MASK` silently turns 32768 into 0 and 65537 into 1, which addresses a different
+/// device that probably exists. The whole point is to refuse before the cast, not after.
+pub fn is_stable_device_id(id: u64) -> bool {
+    id >= 1 && id <= STABLE_DEVICE_ID_MAX as u64
+}
 
 /// `ui_track_mix_flags` bit 2: does this track quantize its notes to the harmony timeline?
 ///

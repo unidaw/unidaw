@@ -122,6 +122,15 @@ void handleAddPatcherNode(PatcherCommandDeps& deps,
                            (std::string("rejected:") + why).c_str(), probe.trackId, 0, "");
       }
     };
+    // A MASK GIVES A NUMBER, NOT AN IDENTITY. AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME: every
+    // consumer of the 15-bit patcher carrier validates before use. Zero arrives whenever a client
+    // sets the presence bit without filling in an id, and zero is the ABSENCE of a device
+    // everywhere else — it used to fall through to the scan below and report `no_such_device`,
+    // which blames the project for a malformed command. Refusing here names the actual fault.
+    if (!daw::isStableDeviceId(deviceId)) {
+      refuse("device_id_not_an_identity");
+      return;
+    }
     if (!runtime) {
       refuse("no_such_track");
       return;
@@ -395,6 +404,15 @@ void handleSetPatcherNodeConfig(PatcherCommandDeps& deps,
                            (std::string("rejected:") + why).c_str(), configPayload.trackId, 0, "");
       }
     };
+    // A MASK GIVES A NUMBER, NOT AN IDENTITY. AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME: every
+    // consumer of the 15-bit patcher carrier validates before use. Zero arrives whenever a client
+    // sets the presence bit without filling in an id, and zero is the ABSENCE of a device
+    // everywhere else — it used to fall through to the scan below and report `no_such_device`,
+    // which blames the project for a malformed command. Refusing here names the actual fault.
+    if (!daw::isStableDeviceId(deviceId)) {
+      refuseCfg("device_id_not_an_identity");
+      return;
+    }
     if (!runtime) {
       refuseCfg("no_such_track");
       return;

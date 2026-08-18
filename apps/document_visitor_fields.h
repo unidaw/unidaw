@@ -79,9 +79,14 @@ void visitFields_(TypeTag<TrackRouting>, V& visit) {
 // here; it is the one field in the document that is two things at once.
 template <typename V>
 void visitFields_(TypeTag<Device>, V& visit) {
-  // Stable, minted as max+1 by nextDeviceId, collision-rejected by addDevice, persisted as
-  // "device_id" and used for lookup by every command path. This is what lets a differ say
-  // "device 7 changed" rather than "the third element differs".
+  // Stable and PROJECT-GLOBAL: allocated from the document's next_device_id high-water mark,
+  // range- and collision-rejected by addDevice, persisted as "device_id" and used for lookup by
+  // every command path. This is what lets a differ say "device 7 changed" rather than "the third
+  // element differs".
+  //
+  // It used to say "minted as max+1 by nextDeviceId" — a function that no longer exists, naming a
+  // rule that was the defect: max+1 over one chain is track-scoped AND reuses a deleted id
+  // (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME).
   visit.field("device_id", &Device::id, FieldKind::Identity);
   visit.field("kind", &Device::kind);
   visit.field("capability_mask", &Device::capabilityMask);
@@ -276,6 +281,18 @@ void visitFields_(TypeTag<ProjectDocument>, V& visit) {
   // correctness was allowed to ship before representation.
   visit.field("clips", &ProjectDocument::clips);
   visit.field("tracks", &ProjectDocument::tracks);
+  // THE DEVICE-ID WATERMARK IS `Session`, AND THE REASON IS THE ONE THING IT MUST NEVER DO.
+  //
+  // It is persisted, so the instinct is Authored. But Authored means undo restores it, and undo
+  // restoring a LOWER watermark hands a deleted device's id back out — the replacement then
+  // inherits its plugin-state blob and every automation lane pointed at it
+  // (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME). DeviceIdWatermark::adopt takes the max
+  // precisely so that cannot happen, and marking this Authored made undo_ratchet report
+  // "AddDevice: UNDO did not restore the document" — the comparer correctly seeing a field the
+  // engine correctly refuses to move.
+  //
+  // Session is the kind whose rule is "undo must never restore this", which is exactly true here.
+  visit.field("next_device_id", &ProjectDocument::nextDeviceId, FieldKind::Session);
 }
 
 }  // namespace daw

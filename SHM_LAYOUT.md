@@ -3,6 +3,31 @@
 This document describes the shared memory layout between the Engine and Host,
 and the UI projection protocol for the Rust process.
 
+## Protocol versions
+
+Two numbers gate compatibility, and each has exactly ONE authority. They are restated here because
+a layout document that does not say which protocol it describes is a document you cannot date — and
+they are CHECKED against their authorities by `tools/version_parity_check.sh`, so this is a guarded
+mirror rather than a third copy free to drift.
+
+- `kShmVersion` = 42 — the engine/UI shared-memory contract. Authority: `apps/shared_memory.h`,
+  mirrored in `ui/daw-bridge/src/layout.rs` as `K_SHM_VERSION`.
+- `kControlVersion` = 15 — the engine/host control-message contract. Authority:
+  `apps/ipc_protocol.h`. No Rust mirror: the control channel is engine-to-host only.
+
+Both advanced together for AE-P1.2 G2-B item 18, and both advanced EARLY in it. No byte moved and
+no field grew; what changed is what existing bytes MEAN.
+
+- ALREADY TRUE: device ids are project-global rather than track-scoped, which re-points
+  `UiPatcherNode::ownerDeviceId`, the low half of `packSamplerAddr` and `kUiPatcherDeviceIdMask`.
+- NOT YET IN THE TREE: a later step of the same change gives `ReplayComplete` a payload gate and
+  turns `BlockMailbox.replayAckSampleTime` into `replayAckGate`.
+
+The second is named here because the version covers it, not because it has landed — the bump leads
+the payload change rather than following it, so no build ever ships changed meaning under an
+unchanged marker. A mismatched reader would parse every field correctly and attribute it to the
+wrong device, which is precisely the failure a magic number cannot catch and a version can.
+
 ## SHM Segments
 
 - Engine UI SHM (owned by engine): `/daw_engine_ui` (override with `DAW_UI_SHM_NAME`)

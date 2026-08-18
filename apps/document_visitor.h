@@ -67,9 +67,18 @@ enum class FieldKind : uint8_t {
   // for CORRESPONDENCE (which object is this?) rather than for equality of content, so a differ
   // can say "device 7 changed" instead of "the third element differs".
   Identity,
-  // Session state that is not part of the document at all: the transport loop, playhead, selection.
-  // Undo must NEVER restore these — that is exactly the bug fixed in 53b77d5, where undo ran the
-  // load path and wiped the user's loop region on every Ctrl-Z.
+  // A field UNDO MUST NEVER RESTORE. That is the whole rule, and it is what the name is for.
+  //
+  // Most such fields are session state that is not in the document at all — the transport loop,
+  // playhead, selection — which is the bug fixed in 53b77d5, where undo ran the load path and
+  // wiped the user's loop region on every Ctrl-Z. That was the only shape when this was written,
+  // so the definition used to SAY "not part of the document at all".
+  //
+  // It is not the only shape. `ProjectDocument::nextDeviceId` is PERSISTED — a project must
+  // remember which ids it has already spent — and must still never go backwards, because undo
+  // restoring a lower watermark makes a deleted device's id available again, and the replacement
+  // inherits its plugin state (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME). Persisted and
+  // un-undoable are independent properties; this kind names the second one.
   Session,
 };
 

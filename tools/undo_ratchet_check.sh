@@ -261,7 +261,23 @@ snap() {  # snap <label> -> path of a copy of the saved document
   cli do save probe --force
   for _ in $(seq 1 60); do [ -s "$src" ] && break; sleep 0.1; done
   [ -s "$src" ] || { echo "  FAIL: the engine never wrote $src — every comparison below is void"; exit 1; }
-  cp "$src" "$TMP/$1.json"
+  # THE ONE FIELD UNDO IS NOT ALLOWED TO REWIND, removed from BOTH sides of every comparison
+  # below rather than from one.
+  #
+  # `next_device_id` is the project's device-id high-water mark (AE-P1.2 G2-B item 18,
+  # R-DEVICE-ID-LIFETIME). It is persisted, and it is MONOTONIC: undoing an "add device" must not
+  # make that device's id available again, because the id names its plugin-state blob, its
+  # parameter manifest and every automation lane pointed at it. So a save taken after undo
+  # legitimately differs from a save taken before the add — in exactly this field and no other.
+  #
+  # Comparing bytes with it present made this check report "AddDevice: UNDO did not restore the
+  # document", which is the comparer correctly seeing a field the engine correctly refuses to
+  # move. The alternative — lowering EXPECTED_UNDOABLE — would claim AddDevice is not undoable,
+  # which is false and would retire real coverage.
+  #
+  # ONLY THIS KEY, by exact name, on its own line. A looser filter could hide a difference that
+  # matters, which is the failure this check exists to catch.
+  grep -v '^  "next_device_id":' "$src" > "$TMP/$1.json"
   echo "$TMP/$1.json"
 }
 

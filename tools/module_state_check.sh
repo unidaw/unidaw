@@ -76,7 +76,7 @@ def routing():
     r = lambda k="none": {"kind": k, "track_id": 0, "input_id": 0}
     return {"midi_in": r(), "midi_out": r(), "audio_in": r(),
             "audio_out": r("master"), "pre_fader_send": True}
-dev = {"device_id": 0, "kind": "vst_instrument", "capability_mask": 5,
+dev = {"device_id": 1, "kind": "vst_instrument", "capability_mask": 5,
        "patcher_node_id": 0, "host_slot_index": DIRECT, "bypass": False,
        "vst_ref": {"vendor": "", "name": "identity", "path": "", "uid16": ""}}
 tr = {"track_id": 0, "name": "T", "harmony_quantize": False, "lines_per_beat": 4,
@@ -112,7 +112,7 @@ wait_for_boot "$HOME_DIR/eng.log" "$ENG" 80
 # which never matches (the array is "params"), so the poll timed out and the check failed —
 # a predicate that can never be true is as bad as one that is always true.
 params_ready() {
-  cli get device-params 0 0 2>/dev/null | python3 -c 'import json,sys
+  cli get device-params 0 1 2>/dev/null | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
 except Exception:
@@ -121,7 +121,7 @@ raise SystemExit(0 if d.get("params") else 1)'
 }
 wait_until 20 params_ready || true
 
-PARAMS="$(cli get device-params 0 0 2>/dev/null)"
+PARAMS="$(cli get device-params 0 1 2>/dev/null)"
 read -r UID16 DEFAULT <<<"$(echo "$PARAMS" | python3 -c "
 import json, sys
 try:
@@ -148,9 +148,9 @@ python3 -c "raise SystemExit(0 if abs(float('$DEFAULT') - float('$WANT')) > 0.01
         survived' and 'the plugin came up at defaults' are the SAME observation and this check
         cannot fail. Pick a different value"
 
-cli do set-param 0 0 "$UID16" "$SET_MILLI" >/dev/null 2>&1 || true
+cli do set-param 0 1 "$UID16" "$SET_MILLI" >/dev/null 2>&1 || true
 readvalue() {  # readvalue <cli-fn>
-  $1 get device-params 0 0 2>/dev/null | python3 -c "
+  $1 get device-params 0 1 2>/dev/null | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -193,7 +193,7 @@ grep '"event":"project.module_saved"' "$HOME_DIR/eng.log" | tail -1 | grep -q '"
 [ -s "$HOME_DIR/song.uni" ] || fail "no song.uni was written"
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 
-BLOB="$HOME_DIR/song.uniproj.state/t0_d0.bin"
+BLOB="$HOME_DIR/song.uniproj.state/t0_d1.bin"
 [ -s "$BLOB" ] || \
   fail "the loose save wrote no state blob at $BLOB, so there was nothing for the module to pack
         and the rest of this check would pass vacuously:
@@ -203,16 +203,16 @@ cp "$BLOB" "$HOME_DIR/original.bin"
 if command -v unzip >/dev/null 2>&1; then
   LISTING="$(unzip -l "$HOME_DIR/song.uni" 2>&1)"
   [ -n "$LISTING" ] || fail "unzip -l printed NOTHING for song.uni"
-  printf '%s' "$LISTING" | grep -q 'project.state/t0_d0.bin' || \
-    fail "the module does not contain project.state/t0_d0.bin — the plugin's state is NOT in the
+  printf '%s' "$LISTING" | grep -q 'project.state/t0_d1.bin' || \
+    fail "the module does not contain project.state/t0_d1.bin — the plugin's state is NOT in the
         file, so every synth in this module is silent on the other machine. Listing:
 $LISTING"
   # The manifest too: it is the half that is readable WITHOUT the plugin installed, which is the
   # only thing a received module can offer someone who does not own it.
-  printf '%s' "$LISTING" | grep -q 'project.state/t0_d0.params.json' || \
+  printf '%s' "$LISTING" | grep -q 'project.state/t0_d1.params.json' || \
     fail "the module carries the opaque blob but not its parameter manifest. Listing:
 $LISTING"
-  echo "  packs: project.state/t0_d0.bin and its .params.json are inside the module"
+  echo "  packs: project.state/t0_d1.bin and its .params.json are inside the module"
 else
   echo "  note: unzip not present, skipping the listing check"
 fi
@@ -239,7 +239,7 @@ grep '"event":"project.module_loaded"' "$AWAY_DIR/eng.log" | tail -1 | grep -q '
   fail "the module did not load on the other machine:
         $(grep -o '\"event\":\"project.module_loaded\"[^}]*' "$AWAY_DIR/eng.log" | tail -1)"
 
-UNPACKED="$AWAY_DIR/song/project.state/t0_d0.bin"
+UNPACKED="$AWAY_DIR/song/project.state/t0_d1.bin"
 [ -s "$UNPACKED" ] || \
   fail "no state blob at $UNPACKED after the move. The archive prefix is derived from
         pluginStateDirFor(project.json), so the unpacker's generic write-every-entry loop should

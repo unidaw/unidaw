@@ -1,5 +1,6 @@
 #include "engine_load_project.h"
 
+#include "apps/device_id_migration.h"
 #include "apps/engine_clip_adoption.h"
 #include "apps/engine_rt_helpers.h"  // tearDownHostState
 #include "apps/engine_load_patcher_pool.h"
@@ -79,6 +80,17 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
   auto& tracks = deps.engineState.trackTable.tracks;
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto& waveformStore = deps.waveformStore;
+
+    // ADOPT THE DEVICE-ID WATERMARK, RAISING IT ONLY. This is one of exactly two places the
+    // document form and the live authority meet (the other is captureDocument). AE-P1.2 G2-B item
+    // 18, R-DEVICE-ID-LIFETIME: the mark "never decreases on load or undo/redo".
+    //
+    // UNDO REACHES THIS FUNCTION TOO, which is the whole reason `adopt` takes the max rather than
+    // assigning. Stepping back over an "add device" restores a document whose watermark is lower
+    // by the ids that add allocated; assigning would hand those ids straight back out, and the
+    // device they named still owns a plugin-state blob, a parameter manifest, every automation
+    // lane pointed at it and every mirror entry keyed on it.
+    deps.engineState.deviceIdWatermark.adopt(document.nextDeviceId);
 
     // Hold off aux-child derivation until this load has finished mutating the track set
     // (adopt, tear down leftovers, set liveTrackCount). Cleared on every exit path.
@@ -685,7 +697,8 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
 // The body below is the block from applyDocument, moved verbatim.
 static void restorePluginStateFromDisk(LoadProjectDeps& deps,
                                        const daw::ProjectDocument& document,
-                                       const std::string& path) {
+                                       const std::string& path,
+                                       const daw::DeviceIdMigration& migration) {
   auto& tracks = deps.engineState.trackTable.tracks;
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
     // Restore plugin state. The chain was just rebuilt from the project above,
@@ -723,9 +736,37 @@ static void restorePluginStateFromDisk(LoadProjectDeps& deps,
         continue;
       }
       for (size_t hostIndex = 0; hostIndex < savedIds.size(); ++hostIndex) {
-        const auto blobPath =
+        // WHERE A MIGRATED DEVICE'S BLOB ACTUALLY IS. The blob is named for the id the device had
+        // WHEN IT WAS SAVED, and a schema 1-5 load may have renumbered that device on the way in
+        // (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME: two tracks each holding device 1 cannot
+        // both keep it). Looking only under the NEW id finds nothing, `continue`s without a word,
+        // and the next save writes the new name — orphaning the old blob permanently. The user
+        // opens their project, every plugin is at factory defaults, and nothing reports it.
+        //
+        // `legacyArtifactKeys` exists for exactly this and is the map's own record of what each
+        // hosted device used to be called, so this is a lookup rather than a second derivation.
+        // The CURRENT name is tried first: a schema-6 document has no migration and must not pay
+        // for one, and a device that kept its id resolves identically either way.
+        std::filesystem::path blobPath =
             stateDir / pluginStateFileName(source.trackId, savedIds[hostIndex]);
         std::ifstream in(blobPath, std::ios::binary);
+        if (!in) {
+          const auto legacy = migration.legacyArtifactKeys.find(savedIds[hostIndex]);
+          if (legacy != migration.legacyArtifactKeys.end()) {
+            const auto legacyPath = stateDir / pluginStateFileName(legacy->second.trackId,
+                                                                   legacy->second.oldDeviceId);
+            in.clear();
+            in.open(legacyPath, std::ios::binary);
+            if (in) {
+              DAW_EVENT("project.state_restored_from_legacy_key")
+                  .field("track", source.trackId)
+                  .field("device", savedIds[hostIndex])
+                  .field("old_track", legacy->second.trackId)
+                  .field("old_device", legacy->second.oldDeviceId);
+              blobPath = legacyPath;
+            }
+          }
+        }
         if (!in) {
           continue;
         }
@@ -758,7 +799,8 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
                          std::string* error) {
   // Read the file, then apply it. Everything that was below this point is applyDocument now.
   daw::ProjectDocument document;
-  if (!daw::loadProject(document, path, error)) {
+  daw::DeviceIdMigration migration;
+  if (!daw::loadProject(document, path, error, &migration)) {
     return false;
   }
   if (!applyDocument(deps, document, path, error)) { return false; }
@@ -766,7 +808,7 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   // OPENING A FILE pushes its saved plugin blobs into the hosts. Undo must not: the blobs are not
   // in the document, so re-pushing them reverts unsaved plugin edits rather than restoring
   // anything. See restorePluginStateFromDisk.
-  restorePluginStateFromDisk(deps, document, path);
+  restorePluginStateFromDisk(deps, document, path, migration);
 
   // A LOAD REPLACES THE SONG, so any hand-set loop belonged to the OLD one — and this is the only
   // place that is true. It used to live inside applyDocument, which was correct until UNDO started

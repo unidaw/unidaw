@@ -331,8 +331,17 @@ int main(int argc, char** argv) {
 
 
 
+  // The engine's state, in one object; the bindings below keep every body unchanged. Why it
+  // exists and what may go in it: apps/engine_state.h.
+  //
+  // DECLARED BEFORE trackSetupDeps, which used to come first. setupTrackRuntime allocates a
+  // device id for the default instrument and must therefore reach the project-global watermark
+  // that lives here. Hoisting is safe for exactly the reason engine_state.h already records: every
+  // member is default-constructed and none of them starts a thread or touches another.
+  daw::engine::EngineState engineState;
+
   daw::engine::TrackSetupDeps trackSetupDeps{
-      baseConfig, buildTrackSnapshot, resolvePluginIndex};
+      baseConfig, buildTrackSnapshot, resolvePluginIndex, engineState.deviceIdWatermark};
 
   auto setupTrackRuntime = [&](uint32_t trackId, const std::string& trackPluginPath,
                                bool allowConnect, bool startHost)
@@ -340,10 +349,6 @@ int main(int argc, char** argv) {
     return daw::engine::setupTrackRuntime(trackSetupDeps, trackId, trackPluginPath,
                                           allowConnect, startHost);
   };
-
-  // The engine's state, in one object; the bindings below keep every body unchanged. Why it
-  // exists and what may go in it: apps/engine_state.h.
-  daw::engine::EngineState engineState;
   auto& trackTable = engineState.trackTable;
   auto& tracks = trackTable.tracks;
   tracks.reserve(daw::kUiMaxTracks);
@@ -1202,27 +1207,6 @@ int main(int argc, char** argv) {
       running, restartMutex, restartCv, restartQueue, applyHostBypassStates};
   std::thread restartWorker([&] { daw::engine::runRestartWorker(restartWorkerDeps); });
 
-  auto updateTrackChainForInstrument = [&](TrackRuntime& runtime,
-                                           uint32_t pluginIndex) {
-    {
-      std::lock_guard<std::mutex> lock(runtime.trackMutex);
-      auto& devices = runtime.track.chain.devices;
-      auto it = std::find_if(devices.begin(), devices.end(),
-                             [&](const daw::Device& device) {
-                               return device.kind == daw::DeviceKind::VstInstrument;
-                             });
-      if (it == devices.end()) {
-        const daw::Device instrument =
-            daw::makeVstInstrumentDevice(pluginIndex);
-        daw::addDevice(runtime.track.chain, instrument, daw::kDeviceIdAuto);
-      } else {
-        it->hostSlotIndex = pluginIndex;
-        it->capabilityMask =
-            daw::capabilityMaskForKind(daw::DeviceKind::VstInstrument);
-      }
-    }
-    rebuildHostForChain(runtime);
-  };
 
   // EVERY DIFF SEND IS COUNTED, AND A DROP IS LOGGED — once, instead of in three emitters.
   //
@@ -1977,8 +1961,7 @@ int main(int argc, char** argv) {
 
   daw::engine::DeviceCommandDeps deviceCommandDeps{
      engineState, audioPlaybackBlockId, pluginPath, resolveDevicePluginPath,
-      rebuildHostForChain, emitChainSnapshot, ensureTrack, resolvePluginPath,
-      updateTrackChainForInstrument
+      rebuildHostForChain, emitChainSnapshot, ensureTrack, resolvePluginPath
   };
 
   // std::function wrappers so the Deps struct can hold references with a lifetime. A raw

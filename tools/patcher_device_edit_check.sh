@@ -99,7 +99,11 @@ def dev(dev_id, node_base, kind):
 tr = {"track_id": 0, "name": "T", "harmony_quantize": False, "lines_per_beat": 4,
       "mixer": {"gain_db": 0.0, "pan": 0.0, "mute": False, "solo": False},
       "routing": routing(),
-      "device_chain": [dev(0, 0, "euclidean"), dev(1, 10, "euclidean")],
+      # DEVICE IDS 1 AND 2, not 0 and 1. Zero stopped being a device identity (AE-P1.2 G2-B
+      # item 18, R-DEVICE-ID-LIFETIME): the loader allocates a real id for a legacy zero, so a
+      # fixture written with 0 gets renumbered under it and every id this check asserts moves.
+      # Naming valid ids up front keeps the fixture saying what it means.
+      "device_chain": [dev(1, 0, "euclidean"), dev(2, 10, "euclidean")],
       "mod_links": [], "placements": []}
 json.dump({"schema_version": 4, "meta": {"name": "pd"}, "nanoticks_per_quarter": Q,
            "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
@@ -122,7 +126,7 @@ PYN
 }
 
 BEFORE="$(nodes_of "$TMP/pd.uniproj.json")"
-[ "$BEFORE" = "0:2 1:2" ] || fail "the fixture should start with 2 nodes on each device, got [$BEFORE]"
+[ "$BEFORE" = "1:2 2:2" ] || fail "the fixture should start with 2 nodes on each device, got [$BEFORE]"
 
 SHM="/pdchk_$$"
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
@@ -139,7 +143,7 @@ wait_for_boot "$TMP/eng.log" "$ENG" 80
 # and after_command below waits for its own journal line. Neither needed a guess in between.
 
 # ---- LANDS + ISOLATED. Add an LFO to DEVICE 1 only.
-after_command "$TMP" cli do patcher-node --track 0 --device 1 --type lfo || true
+after_command "$TMP" cli do patcher-node --track 0 --device 2 --type lfo || true
 grep -q '"event":"patcher_device_edit.applied"' "$TMP/eng.log" || \
   fail "the per-device edit was not applied. Without --device the command edits the shared pool
         and is never saved for a project with per-device graphs, so the engine must report which
@@ -148,12 +152,12 @@ grep -q '"event":"patcher_device_edit.applied"' "$TMP/eng.log" || \
 cli do save pdout --force >/dev/null 2>&1 || true
 sleep 1.6
 AFTER="$(nodes_of "$TMP/pdout.uniproj.json")"
-[ "$AFTER" = "0:2 1:3" ] || \
-  fail "after adding one node to DEVICE 1 the saved graphs are [$AFTER], expected [0:2 1:3].
-        0:3 means the edit landed on the wrong device; 0:2 1:2 means it went to the shared pool
+[ "$AFTER" = "1:2 2:3" ] || \
+  fail "after adding one node to DEVICE 2 the saved graphs are [$AFTER], expected [1:2 2:3].
+        1:3 means the edit landed on the wrong device; 1:2 2:2 means it went to the shared pool
         and was dropped by the save; anything with 5 nodes means the pool was parked on a device
         and overwrote its graph"
-echo "  lands + isolated: the node went to device 1 only ([$AFTER])"
+echo "  lands + isolated: the node went to device 2 only ([$AFTER])"
 
 # ---- EXECUTES. Assembly used to happen only at load, so a runtime patcher edit changed nothing
 # about what was running until the next open — saved and inert.

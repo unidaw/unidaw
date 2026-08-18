@@ -56,7 +56,31 @@ void handleAddDevice(ChainCommandDeps& deps,
       // literally, so `add-device --kind sampler` on a fresh track created a device whose id
       // WAS 0, which is the same value the engine uses for "this track has no sampler".
       // Nine guards then skipped it and the instrument was never sent a note.
-      device.id = chainPayload.deviceId != 0 ? chainPayload.deviceId : daw::kDeviceIdAuto;
+      // ZERO STILL MEANS "PICK ONE" ON THE WIRE — the sentence below is unchanged — but "pick
+      // one" is now answered by the PROJECT's watermark rather than by this chain. A track-scoped
+      // `max(existing)+1` gave two tracks a device numbered 1 and reissued a deleted device's
+      // number (AE-P1.2 G2-B item 18, R-DEVICE-ID-LIFETIME).
+      //
+      // AN EXPLICIT id FROM THE WIRE IS STILL HONOURED, and is now validated as a project-global
+      // identity: addDevice refuses anything outside [1, 0x7FFF] and anything already on this
+      // chain, and the candidate validation refuses a duplicate elsewhere in the project.
+      // TWO SPELLINGS OF "YOU PICK", and both have to be honoured. A bare 0 is what daw-cli and
+      // daw-agent send; `kChainDeviceIdAuto` (0xFFFFFFFF) is what the sidecar sends, and its own
+      // test pins that sentinel. Reading only the 0 spelling made every add-device from the web
+      // UI arrive as an EXPLICIT id of 0xFFFFFFFF, which addDevice then refused as not an
+      // identity — the primary UI's add-device broken by a change that never touched it.
+      const bool engineAssignsTheId = chainPayload.deviceId == 0 ||
+                                      chainPayload.deviceId == daw::kChainDeviceIdAuto;
+      device.id = engineAssignsTheId ? deps.engineState.deviceIdWatermark.allocate()
+                                     : chainPayload.deviceId;
+      // AN EXPLICIT ID MUST STILL RAISE THE MARK. Without this, `add-device --device-id 5000`
+      // saves a document holding device 5000 with next_device_id 2 — and the next load refuses it
+      // as "at or above the watermark". A clean save and an unopenable file, with no warning at
+      // either end. Raising to id+1 makes the mark cover what was actually issued, which is the
+      // invariant validateGlobalDeviceIds checks.
+      if (!engineAssignsTheId && daw::isStableDeviceId(device.id)) {
+        deps.engineState.deviceIdWatermark.adopt(device.id + 1u);
+      }
       device.kind = static_cast<daw::DeviceKind>(chainPayload.deviceKind);
       device.patcherNodeId = chainPayload.patcherNodeId;
       // THE WIRE IS UNCHANGED, and the translation happens here at the boundary. AddDevice still
