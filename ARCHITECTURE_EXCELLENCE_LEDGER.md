@@ -7014,3 +7014,65 @@ kind to leave: it is not yours, it is in someone else's closed work, and the cha
 rather than in code. That combination is exactly how a suite acquires permanent red — and this
 ledger already records what a permanently red suite does, which is become furniture. The check was
 right, the artifact was wrong, and the fix was four words long.
+
+### The repair needed its own review, and one of its claims was the error it had just named
+
+A third reviewer read `InboundAudio` and found ten things. Three matter here.
+
+**The repair introduced a data race.** `reset()` cleared the buffers from `resetTrackContent`, which
+runs on the command thread holding `trackMutex` — while the producer writes the same buffers under
+`inboundMutex`. Different mutexes is no mutex. The write site has no guard on the destination being
+alive, so a source keeps delivering into a track being torn down: clearing a vector while another
+thread is inside `assign()` or writing through the reference it returned is a use-after-free. **This
+did not exist before the change** — what it replaced was an atomic flag and a vector nothing reset.
+`reset()` now takes the lock, with a separately named `resetBeforePublication()` for the one caller
+whose runtime no other thread can see yet. That asymmetry is written down at the method, because a
+lock contract that holds for two of three methods is the kind of thing a reader assumes uniform.
+
+**The fix that was supposed to ratchet still doesn't, one level up.** The type removed the *index* a
+call site could get wrong. It did not remove the *block id* the call sites pass: writing
+`deliveryBufferFor(blockId - 1, …)` restores same-block delivery, and nothing registered notices —
+this test links no engine code, and the nine routing checks assert peaks, energy and log-line counts.
+My comment said "**Both** disappear here." One did. The claim is corrected in the header, in
+CMakeLists and in the declaration, each now stating the limit rather than implying coverage.
+
+**And the correction contained the error it was correcting.** The declaration I wrote — in the entry
+whose subject was unsupported claims — asserted that "at least two of the kept runs overlap a ctest
+run." The reviewer reconstructed every ctest window from the logs: **none of them does.** Withdrawn.
+What the timestamps *do* show is better: three of those runs finished within eight seconds of each
+other, while one run performs two three-second renders. **The runs contaminated each other**, which
+is verifiable, explains a bimodal spread far better than start-up alignment, and I had not looked.
+
+### Two smaller ones with a shared shape
+
+The declaration also claimed the nine routing checks contain "none of them a block position" —
+`sidechain_check.sh` asserts a relative onset ordering *inside a single render*, which is exactly the
+discriminator shape the entry proposed as not existing. And the noise figure came from a **censored**
+sample: the script keeps a directory only when the run failed, so every kept run is a disagreement by
+construction and the set cannot estimate variation at all — only that large disagreements occur.
+
+**Both are the same mistake as the ctest-overlap claim: describing evidence I had not enumerated.**
+Three times in one entry, in prose written specifically to stop doing that.
+
+### The number that was wrong in three places
+
+I wrote that the check looks for a "two-block difference" between the two orderings. It is **one**.
+Under the old single buffer the orderings are same-block delivery and next-block delivery — latency 0
+and latency 1 — and audio cannot arrive *before* it is rendered, so nothing can be "a block early."
+The script's own line 25 said "exactly one block" thirty lines above two sentences saying two. The
+conclusion survives (a 3-to-5-block spread against a one-block property is worse, not better), but
+the number was stated as measured fact and derived from nothing.
+
+### What else came out of it
+
+- `takeDeliveryFor` compared the stored buffer against **the caller's own buffer**, which the shipped
+  caller resizes under the same lock immediately above — a check whose precondition is supplied by
+  its own setup. It takes the expected size explicitly now.
+- `resetTrackContent` cleared `inboundAudio` and not `inboundMidiEvents`, declared beside it, filled
+  by the same routing pass, drained below the same early returns, and unbounded for the same reason.
+  **The comment I wrote said "the same class of bug, one field along" — about the field I had fixed,
+  while the field it named sat one line below, unfixed.**
+- The test claimed properties it never checked: that a failed take leaves the caller's buffer
+  untouched, that the delivery buffer is sized to what was asked for, and it read only sample 0 of
+  four. Two branches that silently destroy audio had no test at all. All covered now, and the three
+  reverts still fail it.
