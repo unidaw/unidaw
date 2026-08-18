@@ -952,6 +952,18 @@ pub const K_UI_SAMPLER_ENVELOPE_SLOTS: usize = 4;
 pub const K_UI_MAX_ENVELOPE_POINTS: usize = 64;
 pub const UI_AUTOMATION_FLAG_DISCRETE: u32 = 1 << 0;
 
+/// This lane's target cannot be resolved and it does not dispatch — a legacy compact plugin index
+/// that no longer identifies anything. Mirrors `kUiAutomationFlagTargetDisabled` in
+/// `apps/shared_memory.h` (AE-P1.2 G2-B item 18, R-PROJECT-TARGET-MIGRATION).
+///
+/// NOTHING IN THIS TREE READS IT YET, and that is stated rather than left to be discovered. The
+/// engine sets it on both publication paths; a UI that ignores it will draw a curve that plays
+/// nothing and give the user no way to know why, and a UI that reads a lane and writes it back
+/// unchanged will convert the disabled target to "every plugin" — discarding the original index
+/// and the reason, which are the only record of what the lane meant. Consuming it is the web UI's
+/// half of this change.
+pub const UI_AUTOMATION_FLAG_TARGET_DISABLED: u32 = 1 << 1;
+
 // v28 automation read-back regions, generated from shared_memory.h. Hand-mirrored structs are
 // how the extents capacity diverged unnoticed; bindgen's layout_tests + the C++ static_asserts
 // pin these, and the const_asserts below tie each hand constant to a generated region size, so a

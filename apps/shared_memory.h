@@ -1007,14 +1007,26 @@ constexpr uint32_t kUiMaxAutomationLanes = 64;
 constexpr uint32_t kUiMaxAutomationPoints = 512;   // per answered lane
 constexpr uint32_t kUiAutomationSlots = 4;
 constexpr uint32_t kUiAutomationFlagDiscrete = 1u << 0;
+// This lane's target CANNOT BE RESOLVED and it does not dispatch — a legacy compact plugin index
+// that no longer identifies anything (AE-P1.2 G2-B item 18, R-PROJECT-TARGET-MIGRATION, and
+// apps/automation_target.h for why it is disabled rather than guessed).
+//
+// A FLAG RATHER THAN A SENTINEL IN targetPluginIndex, because the lane still has to publish
+// SOMETHING there and every value is either a real id or "all". Without this bit a disabled lane
+// is indistinguishable from an all-target one, so the UI would draw a curve that plays nothing and
+// give the user no way to know why.
+constexpr uint32_t kUiAutomationFlagTargetDisabled = 1u << 1;
 
 // One automated parameter. paramId is the STRING the AutomationClip is keyed on (the engine hashes
 // it to the uid16 the wire uses), so a client can name a lane without resolving the hash.
 struct UiAutomationLane {                  // 32 B
   uint32_t trackId = 0;
-  uint32_t targetPluginIndex = 0;          // kParamTargetAll = every plugin on the track
+  // kParamTargetAll = every plugin on the track; otherwise a project-global stable DEVICE id.
+  // The name is a leftover — see automationTargetFromWire in apps/automation_target.h — and is
+  // renamed by R-STABLE-DEVICE-TARGETS in a later step of this change.
+  uint32_t targetPluginIndex = 0;
   uint32_t pointCount = 0;
-  uint32_t flags = 0;                      // kUiAutomationFlagDiscrete
+  uint32_t flags = 0;                      // kUiAutomationFlagDiscrete | ...TargetDisabled
   char paramId[16]{};
 };
 static_assert(sizeof(UiAutomationLane) == 32, "UiAutomationLane must be 32 bytes");

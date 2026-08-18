@@ -804,7 +804,21 @@ std::string serializeProject(const ProjectDocument& document) {
         writer.beginArrayElement();
         writer.key("param_id", clip.paramId());
         writer.key("discrete", clip.discreteOnly());
-        writer.key("target_plugin_index", clip.targetPluginIndex());
+        // A TAGGED TARGET, and `target_plugin_index` is GONE from what schema 6 writes. See
+        // apps/automation_target.h: the old field conflated "every plugin" with a compact host
+        // index that is a property of one machine at one moment.
+        writer.beginChildObject("target");
+        writer.key("kind", std::string(daw::automationTargetKindToString(clip.target().kind)));
+        if (clip.target().kind == daw::AutomationTargetKind::StableDevice) {
+          writer.key("target_device_id", clip.target().stableDeviceId);
+        }
+        if (clip.target().kind == daw::AutomationTargetKind::DisabledLegacyCompact) {
+          // BOTH, ALWAYS. The number is what the lane used to aim at and the reason is why it
+          // stopped; a disabled lane carrying only one of them cannot be explained to the user.
+          writer.key("legacy_target_plugin_index", clip.target().legacyTargetPluginIndex);
+          writer.key("disabled_reason", clip.target().disabledReason);
+        }
+        writer.endChildObject();
         writer.beginArray("points");
         for (const auto& point : clip.points()) {
           writer.beginArrayElement();
@@ -1222,10 +1236,73 @@ bool deserializeProject(const std::string& json,
           if (paramId.empty()) {
             continue;  // a clip with no param to drive can never be applied
           }
+          daw::AutomationTarget target;
+          if (const auto targetTree = entry.second.get_child_optional("target")) {
+            // SCHEMA 6: a tag, and an unrecognised kind FAILS rather than defaulting. Defaulting
+            // would turn a target this build cannot read into "drive every plugin on the track",
+            // which is the loudest possible wrong answer.
+            daw::AutomationTargetKind kind{};
+            if (!daw::automationTargetKindFromString(
+                    targetTree->get<std::string>("kind", ""), kind)) {
+              setError(error, "unknown automation target kind in project");
+              return false;
+            }
+            target.kind = kind;
+            target.stableDeviceId = targetTree->get<uint32_t>("target_device_id", 0);
+            target.legacyTargetPluginIndex =
+                targetTree->get<uint32_t>("legacy_target_plugin_index", 0);
+            target.disabledReason = targetTree->get<std::string>("disabled_reason", "");
+            if (!daw::automationTargetIsValid(target)) {
+              setError(error, "malformed automation target in project");
+              return false;
+            }
+            if (version > kLastTrackScopedDeviceIdSchema &&
+                entry.second.get_child_optional("target_plugin_index")) {
+              // SCHEMA 6 REJECTS AN UNTAGGED INDEX EVEN BESIDE A TAG. Two targets in one lane is
+              // a document that means two things, and whichever the reader picked would be a
+              // coin toss the user never sees.
+              setError(error, "schema 6 automation lane carries both a target and a "
+                              "target_plugin_index");
+              return false;
+            }
+          } else if (version > kLastTrackScopedDeviceIdSchema) {
+            setError(error, "schema 6 automation lane has no tagged target");
+            return false;
+          } else {
+            // SCHEMA 1-5: one number that meant two things. Only the all-target sentinel carries
+            // over; a concrete index is unknowable without the resolution set of the machine that
+            // wrote it, so the lane keeps its points and its original number and is DISABLED
+            // rather than aimed somewhere plausible. R-PROJECT-TARGET-MIGRATION.
+            //
+            // `target_device_id` is honoured when a document has one: the contract names it, and
+            // it is a durable identity rather than a machine-local index. The global-id migration
+            // below rewrites it through the same map as every other device reference.
+            const uint32_t legacyIndex =
+                entry.second.get<uint32_t>("target_plugin_index", daw::kParamTargetAll);
+            if (const auto legacyDeviceId =
+                    entry.second.get_optional<uint32_t>("target_device_id")) {
+              target = daw::AutomationTarget::device(*legacyDeviceId);
+            } else if (legacyIndex == daw::kParamTargetAll) {
+              target = daw::AutomationTarget::all();
+            } else {
+              target = daw::AutomationTarget::disabledLegacy(legacyIndex,
+                                                             daw::kLegacyCompactUnresolvable);
+              // NAMED, ONCE, WHERE IT HAPPENS. R-PROJECT-TARGET-MIGRATION requires a stable
+              // diagnostic naming the lane and the reason. HERE and not at dispatch: dispatch
+              // runs once per block per lane, so a diagnostic there is a flood that gets muted,
+              // and a muted diagnostic is the same as none. The lane becomes disabled exactly
+              // once — on the import that could not resolve it — and that is the event worth
+              // having.
+              DAW_EVENT("automation.target_disabled")
+                  .field("track", track.trackId)
+                  .field("param", paramId)
+                  .field("legacy_target_plugin_index", legacyIndex)
+                  .field("reason", daw::kLegacyCompactUnresolvable);
+            }
+          }
           daw::AutomationClip clip(paramId,
                                    entry.second.get<bool>("discrete", false),
-                                   entry.second.get<uint32_t>("target_plugin_index",
-                                                              daw::kParamTargetAll));
+                                   std::move(target));
           if (const auto points = entry.second.get_child_optional("points")) {
             for (const auto& p : *points) {
               daw::AutomationPoint point;

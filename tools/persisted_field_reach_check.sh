@@ -378,10 +378,26 @@ HARMONY = {
 # to the CLIP, so it is fixed at creation. A flag that changed meaning halfway through a curve
 # would make the curve unreadable." Same observable shape, opposite verdict. Do not let the
 # resemblance collapse them — that judgement is the only thing this table is really recording.
+#
+# THE TARGET IS FOUR FIELDS NOW, NOT ONE. `target_plugin_index` was a single uint32 that meant
+# two unrelated things — "every plugin on the track", or a COMPACT HOST INDEX that is a property
+# of one machine at one moment. It is a tagged target under `target` since AE-P1.2 G2-B item 18
+# (R-PROJECT-TARGET-MIGRATION); apps/automation_target.h argues the case.
+#
+# Three of the four are EXEMPT for reasons this table already knows how to express, and the fourth
+# is the interesting one: `legacy_target_plugin_index` is written and there is NO command that
+# writes it, because the only thing that produces it is the legacy import. That is `legacy` in
+# this table's vocabulary — a field on its way out, kept so a disabled lane can say what it used
+# to aim at, and removable the day no schema 1-5 project is left.
 AUTOMATION = {
-    "param_id":             "EXEMPT:identity — a lane is addressed by (param_id, target)",
-    "target_plugin_index":  "EXEMPT:identity — the other half of the lane's address",
-    "discrete":             "WriteAutomationPoint",
+    "param_id":                     "EXEMPT:identity — a lane is addressed by (param_id, target)",
+    "kind":                         "SetAutomationTarget",
+    "target_device_id":             "SetAutomationTarget",
+    "legacy_target_plugin_index":   "EXEMPT:legacy — written only by the schema 1-5 import, and "
+                                    "kept so a disabled lane can name what it used to drive",
+    "disabled_reason":              "EXEMPT:derived — set beside the legacy index by the same "
+                                    "import, never authored",
+    "discrete":                     "WriteAutomationPoint",
 }
 
 # ----------------------------------------------------------------------------- the POINT scope.

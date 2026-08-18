@@ -189,9 +189,14 @@ void writeUiAutomationLanesTo(UiWriterDeps& deps, bool force) {
         }
         daw::UiAutomationLane& lane = region->lanes[count];
         lane.trackId = rt->trackId;
-        lane.targetPluginIndex = clip.targetPluginIndex();
+        lane.targetPluginIndex = daw::automationTargetToWire(clip.target());
         lane.pointCount = static_cast<uint32_t>(clip.points().size());
         lane.flags = clip.discreteOnly() ? daw::kUiAutomationFlagDiscrete : 0u;
+        // A DISABLED TARGET PUBLISHES THE all-TARGET SENTINEL, so the flag is the only thing that
+        // separates "drives everything" from "drives nothing and cannot say what it meant to".
+        if (!clip.target().dispatchable()) {
+          lane.flags |= daw::kUiAutomationFlagTargetDisabled;
+        }
         const std::string& id = clip.paramId();
         const size_t n = std::min(id.size(), sizeof(lane.paramId) - 1);
         std::memcpy(lane.paramId, id.data(), n);

@@ -110,6 +110,14 @@ daw::UiAutomationPointPayload pointPayload(uint32_t trackId, const char* paramId
   daw::UiAutomationPointPayload p{};
   p.commandType = static_cast<uint16_t>(daw::UiCommandType::WriteAutomationPoint);
   p.trackId = trackId;
+  // THE ALL-TARGET SENTINEL, which is what every real sender defaults to (daw-cli's `--device`
+  // and the sidecar's `"target"` both fall back to it).
+  //
+  // A zero-initialised payload leaves this 0, and 0 used to be a legal COMPACT HOST INDEX — "the
+  // first hosted plugin". It is not a target at all now: a durable target names a device, and
+  // zero is the absence of one (AE-P1.2 G2-B item 18, R-PROJECT-TARGET-MIGRATION). The handler
+  // refuses it, so a payload that left it zero would test the refusal rather than the write.
+  p.targetPluginIndex = daw::kParamTargetAll;
   p.nanotickLo = static_cast<uint32_t>(tick & 0xffffffffu);
   p.nanotickHi = static_cast<uint32_t>(tick >> 32);
   p.value = value;
@@ -191,6 +199,8 @@ void testWritesAndAccumulates() {
   f.addTrack();
   callWrite(f, pointPayload(0, "cutoff", 0, 0.25f));
   CHECK(f.laneCount(0) == 1);
+  CHECK(!f.trackTable.tracks[0]->track.automationClips.empty());
+  if (f.trackTable.tracks[0]->track.automationClips.empty()) { return; }
   CHECK(f.trackTable.tracks[0]->track.automationClips[0].points().size() == 1);
 
   // A second point on the SAME param must extend that lane, not mint a second one carrying the
@@ -212,6 +222,10 @@ void testTickCarriesAcrossTheSplit() {
   const uint64_t big = (uint64_t{3} << 32) | 12345u;
   callWrite(f, pointPayload(0, "cutoff", big, 0.5f));
   CHECK(f.laneCount(0) == 1);
+  // GUARDED, because indexing an empty vector is UB and a SEGFAULT reports nothing at all —
+  // the run dies before any CHECK can print which assertion failed.
+  CHECK(!f.trackTable.tracks[0]->track.automationClips.empty());
+  if (f.trackTable.tracks[0]->track.automationClips.empty()) { return; }
   const auto& pts = f.trackTable.tracks[0]->track.automationClips[0].points();
   CHECK(pts.size() == 1);
   if (pts.size() == 1) CHECK(pts[0].nanotick == big);

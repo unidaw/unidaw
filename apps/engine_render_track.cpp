@@ -3,6 +3,9 @@
 // captured, so nested lambdas, shadowing and the brace scope all still mean what they
 // meant. Rewriting 1,300 lines to say `deps.x` would have touched every one of them.
 #include "apps/engine_render_track.h"
+
+#include <filesystem>
+#include <optional>
 #include "apps/engine_producer_helpers.h"
 #include "apps/engine_emit_notes.h"
 #include "apps/engine_resolve_events.h"
@@ -382,22 +385,77 @@ bool renderTrack(RenderTrackDeps& deps,
             harmonySnapshot[i] = harmonyEvents[i];
           }
         }
+        // WHICH DEVICES HOLD A HOST SLOT — the same test rebuildHostForChain applies when it
+        // builds `pluginPaths`, INCLUDING its Direct-with-a-real-path case. A device that loads
+        // by path holds a slot exactly like one that resolved through the scan, and a walk that
+        // missed it would number every later device one too low.
+        const auto occupiesSlot = [&](const daw::Device& device) {
+          if (device.hostSlotIndex == daw::kHostSlotIndexDirect &&
+              !device.vstRef.path.empty() &&
+              std::filesystem::exists(device.vstRef.path)) {
+            return true;
+          }
+          return static_cast<bool>(resolveDevicePluginPath(runtime, device.hostSlotIndex));
+        };
+        // THE ALL-TARGET FALLBACK IS A PREFERENCE OVER THAT WALK, not a different walk.
+        //
+        // It picks the first hosted device that is NOT bypassed, which is a sensible choice for a
+        // parameter with no named target. Bypass belongs HERE and not in the slot rule: it decides
+        // which plugin to prefer, never which index a plugin has. Conflating the two put the
+        // preference into the address and aimed named targets at the wrong plugin.
         uint32_t paramTargetIndex = daw::kParamTargetAll;
-        uint32_t hostIndex = 0;
-        for (const auto& device : trackState.chainDevices) {
-          if (device.kind != daw::DeviceKind::VstInstrument &&
-              device.kind != daw::DeviceKind::VstEffect) {
-            continue;
+        daw::forEachHostedDevice(trackState.chainDevices, occupiesSlot,
+                                 [&](uint32_t index, const daw::Device& device) {
+                                   if (device.bypass) {
+                                     return true;  // keep looking; it still holds slot `index`
+                                   }
+                                   paramTargetIndex = index;
+                                   return false;
+                                 });
+        // A STABLE DEVICE ID -> THE COMPACT HOST INDEX THAT NAMES IT RIGHT NOW.
+        //
+        // The compact index is a position in the host's own plugin list, counted over the
+        // resolvable non-bypassed VST devices of this track — the same walk as above. It is a
+        // LIVE value, which is exactly why it is no longer what a lane persists
+        // (apps/automation_target.h); an automation target names a device, and this is where that
+        // durable name becomes the thing the host can act on.
+        //
+        // TEMPORARY SHAPE, STATED AS SUCH: it derives the mapping from `trackState.chainDevices`,
+        // which R-HOST-PLAN-AUTHORITY removes as an execution authority in a later step of this
+        // same change. The ExecutionSnapshot's per-track plan carries the resolved compact index
+        // and this walk goes with it.
+        //
+        // NOTHING, NOT kParamTargetAll, WHEN THE DEVICE IS NOT CURRENTLY HOSTED. An earlier
+        // version returned the all-target sentinel here, and that is a SILENT WIDENING: a lane
+        // aimed at one device whose plugin is bypassed or unresolvable would have broadcast every
+        // one of its points to EVERY plugin on the track. The user asked for one device; the
+        // correct answer when that device is not there is none, not all.
+        const auto compactIndexForDevice = [&](uint32_t stableDeviceId) -> std::optional<uint32_t> {
+          std::optional<uint32_t> found;
+          daw::forEachHostedDevice(trackState.chainDevices, occupiesSlot,
+                                   [&](uint32_t index, const daw::Device& device) {
+                                     if (device.id != stableDeviceId) {
+                                       return true;
+                                     }
+                                     found = index;
+                                     return false;
+                                   });
+          return found;
+        };
+        // ONE PLACE A LANE'S TARGET BECOMES A NUMBER, so the two emit sites below cannot drift.
+        // A disabled target returns nothing at all and the caller skips the lane.
+        const auto resolveLaneTarget =
+            [&](const daw::AutomationClip& lane) -> std::optional<uint32_t> {
+          switch (lane.target().kind) {
+            case daw::AutomationTargetKind::All:
+              return paramTargetIndex;
+            case daw::AutomationTargetKind::StableDevice:
+              return compactIndexForDevice(lane.target().stableDeviceId);
+            case daw::AutomationTargetKind::DisabledLegacyCompact:
+              return std::nullopt;
           }
-          if (device.bypass) {
-            continue;
-          }
-          if (resolveDevicePluginPath(runtime, device.hostSlotIndex)) {
-            paramTargetIndex = hostIndex;
-            break;
-          }
-          hostIndex++;
-        }
+          return std::nullopt;
+        };
         std::atomic<bool> patcherAudioWritten{false};
         // ONE NODE, RUN — apps/engine_run_patcher_node.h. This was a 193-line lambda over twelve
         // implicit captures; eight of them were already reachable through `deps` and `runtime`.
@@ -498,10 +556,11 @@ bool renderTrack(RenderTrackDeps& deps,
                                         uint64_t rangeEnd,
                                         uint64_t baseTickDelta,
                                         const std::array<uint8_t, 16>& uid16) {
-          uint32_t targetIndex = automationClip.targetPluginIndex();
-          if (targetIndex == daw::kParamTargetAll) {
-            targetIndex = paramTargetIndex;
+          const auto resolved = resolveLaneTarget(automationClip);
+          if (!resolved) {
+            return;  // a disabled legacy target: the lane keeps its points and dispatches none
           }
+          uint32_t targetIndex = *resolved;
           std::vector<const daw::AutomationPoint*> points;
           automationClip.getPointsInRange(rangeStart, rangeEnd, points);
           for (const auto* point : points) {
@@ -611,20 +670,31 @@ bool renderTrack(RenderTrackDeps& deps,
                                    seg.baseTickDelta, uid16);
             }
           } else {
+            const auto resolvedContinuous = resolveLaneTarget(automationClip);
+            if (!resolvedContinuous) {
+              continue;  // a disabled legacy target dispatches nothing; its points are kept
+            }
             float lastValue = 0.0f;
             bool hasLast = false;
-            uint32_t targetIndex = automationClip.targetPluginIndex();
-            if (targetIndex == daw::kParamTargetAll) {
-              targetIndex = paramTargetIndex;
-            }
+            uint32_t targetIndex = *resolvedContinuous;
             {
+              // THE MIRROR SUPPLIES THE LAST VALUE, NOT THE TARGET — and it used to supply both.
+              //
+              // The old override read `if (mirror.targetPluginIndex != kParamTargetAll)
+              // targetIndex = mirror.targetPluginIndex;`. That was harmless while a lane's target
+              // was a static persisted number, because the two agreed. The target is RE-DERIVED
+              // every block now (a device's compact slot moves when the chain changes), so the
+              // override became a LATCH: the first concrete index the mirror ever saw won forever,
+              // and bypassing or adding a device left the lane driving the old slot with nothing
+              // to say so.
+              //
+              // The lane's own resolved target is authoritative. The mirror is a de-duplication
+              // cache for the VALUE — `hasLast` below skips emitting a point that would not change
+              // anything — and that is all it is used for here.
               std::lock_guard<std::mutex> lock(runtime.paramMirrorMutex);
               const auto it = runtime.paramMirror.find(uid16);
               if (it != runtime.paramMirror.end()) {
                 lastValue = it->second.value;
-                if (it->second.targetPluginIndex != daw::kParamTargetAll) {
-                  targetIndex = it->second.targetPluginIndex;
-                }
                 hasLast = true;
               }
             }

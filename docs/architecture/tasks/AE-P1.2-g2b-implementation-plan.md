@@ -150,6 +150,34 @@ Each row is a place where a record's own frozen STATEMENT names a construct intr
 | `T-STATE-ARTIFACT-MIGRATION` | 4 | `R-DEVICE-ID-LIFETIME` | the artifact half of the id rule: legacy key read, generation commit, byte-identical restore |
 | `T-TRACK-LOCAL` | 8 | `R-PASS4-REPLACEMENT`, `R-TRANSACTIONAL-EVENT-BATCH` | a parked primer never joins or blocks the ordinary SessionBlockPlan |
 
+## Recorded deviations from the frozen contract
+
+Each row is a place the implementation does NOT do what the record literally says. They are here because a deviation nobody wrote down is indistinguishable from a defect nobody found — and because the checker resolves the record id and the quoted requirement, so an entry cannot drift away from the sentence it is about.
+
+### `R-PROJECT-TARGET-MIGRATION` — step 2
+
+- **The record requires:** "snapshot compilation and dispatch exclude DisabledLegacyCompact and emit a stable diagnostic naming the lane and reason"
+- **What is implemented:** Dispatch and emission EXCLUDE the lane as required. The DIAGNOSTIC is emitted once at the legacy import (automation.target_disabled, naming track, param, the original index and the reason) rather than at dispatch.
+- **Why:** Dispatch runs once per block per lane. A diagnostic there is a flood, a flood gets muted, and a muted diagnostic is worth exactly as much as none. The lane becomes disabled exactly once — on the import that could not resolve it — and that is the event with information in it.
+- **Residual:** Snapshot compilation does not yet exclude: apps/daw_engine_main.cpp copies automationClips into the track snapshot verbatim and the exclusion happens one layer later, at emission. R-HOST-PLAN-AUTHORITY's ExecutionSnapshot (step 4) is where compilation-time exclusion and its diagnostic belong.
+- **Found by:** independent review of the step-2 diff
+
+### `R-STABLE-DEVICE-TARGETS` — step 2
+
+- **The record requires:** "The global id alone is therefore an unambiguous patcher owner in SHM and editor commands even when devices live on different tracks."
+- **What is implemented:** Document validation and both command handlers accept a StableDevice automation target naming any device in the PROJECT, not only one on the lane's own track. The schema 1-5 migration still resolves target_device_id per track, because a legacy id was track-scoped and could only ever have named a device on its own track.
+- **Why:** An earlier version imposed a same-track rule borrowed from the mod-link check beside it. That rule rests on a fact about MODULATION — within-track by construction — and nothing extends it to automation.
+- **Residual:** Dispatch cannot yet resolve a cross-track target: it walks the lane's own track for the compact host index and finds nothing, so such a lane emits no points. Cross-track resolution needs the session ExecutionSnapshot (step 4). No shipped client can author such a lane today.
+- **Found by:** independent review of the step-2 diff
+
+### `R-PROJECT-TARGET-MIGRATION` — step 2
+
+- **The record requires:** "every schema 1-5 concrete target_plugin_index becomes disabled with its original number and reason under same-machine, reordered, unresolved-now-resolved, and resolved-now-unresolved fixtures"
+- **What is implemented:** One fixture shape.
+- **Why:** The migration deliberately never consults the resolution set — a concrete legacy index is disabled without inspecting which plugins load here — so the four fixtures exercise the same code path with the same outcome. Stating that is the point: if the migration ever DID consult the resolution set, the four would stop being equivalent and this note would be wrong.
+- **Residual:** T-PROJECT-TARGET-MIGRATION closes at step 4 and must either land the four fixtures or carry this argument.
+- **Found by:** independent review of the step-2 diff
+
 ## Gate at every step
 
 - cmake --build build is clean, checked as grep -c 'error:' == 0 on the build log, read before anything is committed.

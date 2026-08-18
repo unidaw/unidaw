@@ -10,6 +10,35 @@
 
 namespace daw::engine {
 
+namespace {
+
+// DOES THE PROJECT HOLD THE DEVICE THIS TARGET NAMES?
+//
+// The command boundary has to ask the same question the loader asks, or an accepted edit produces
+// a document that cannot be reopened. R-STABLE-DEVICE-TARGETS makes it a PROJECT question rather
+// than a track one: a global id names a device "even when devices live on different tracks".
+//
+// Each track is read under its own lock, because a chain edit on another thread may be running.
+bool projectHoldsDevice(std::vector<std::unique_ptr<TrackRuntime>>& tracks,
+                        std::mutex& tracksMutex,
+                        uint32_t stableDeviceId) {
+  std::lock_guard<std::mutex> lock(tracksMutex);
+  for (const auto& rt : tracks) {
+    if (!rt) {
+      continue;
+    }
+    std::lock_guard<std::mutex> trackLock(rt->trackMutex);
+    for (const auto& device : rt->track.chain.devices) {
+      if (device.id == stableDeviceId) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 void handleSetAutomationTarget(AutomationCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
@@ -35,13 +64,38 @@ void handleSetAutomationTarget(AutomationCommandDeps& deps,
               << autoPayload.trackId << " not found" << std::endl;
     return;
   }
+  // RESOLVED AND VALIDATED BEFORE ANY TRACK LOCK IS TAKEN, and that ordering is the whole point.
+  //
+  // projectHoldsDevice walks every track under tracksMutex and each track's own trackMutex. Asking
+  // it from inside `runtime->trackMutex` — where the obvious place to put the check is — takes
+  // runtime->trackMutex, then tracksMutex, then runtime->trackMutex again. std::mutex is not
+  // recursive: that is a self-deadlock, and it is invisible in a diff because both lock lines look
+  // perfectly ordinary on their own.
+  //
+  // The target comes from the payload and depends on nothing the lock protects, so there is no
+  // reason to compute it late.
+  daw::AutomationTarget wireTarget;
+  const char* targetRefusal = nullptr;
+  if (!daw::automationTargetFromWire(autoPayload.targetPluginIndex, wireTarget)) {
+    targetRefusal = "not_a_device_identity";
+  } else if (wireTarget.kind == daw::AutomationTargetKind::StableDevice &&
+             !projectHoldsDevice(tracks, tracksMutex, wireTarget.stableDeviceId)) {
+    targetRefusal = "no_such_device_in_project";
+  }
+  if (targetRefusal != nullptr) {
+    DAW_EVENT("automation.target_rejected")
+        .field("track", autoPayload.trackId)
+        .field("target", autoPayload.targetPluginIndex)
+        .field("reason", targetRefusal);
+    return;
+  }
   bool updated = false;
   {
     std::lock_guard<std::mutex> lock(runtime->trackMutex);
     for (auto& clip : runtime->track.automationClips) {
       const auto uid16 = daw::hashStableId16(clip.paramId());
       if (std::memcmp(uid16.data(), autoPayload.uid16, uid16.size()) == 0) {
-        clip.setTargetPluginIndex(autoPayload.targetPluginIndex);
+        clip.setTarget(wireTarget);
         updated = true;
         break;
       }
@@ -113,6 +167,13 @@ void handleRequestAutomationLane(AutomationCommandDeps& deps,
       }
       slot.found = 1;
       slot.flags = clip.discreteOnly() ? daw::kUiAutomationFlagDiscrete : 0u;
+      // THE SAME FLAG THE LANE REGION PUBLISHES. Two publishers of one fact that disagree is how
+      // a UI ends up drawing a curve from one and deciding what it means from the other — this is
+      // the ANSWER path (a lane the UI asked about by name), and it must say the same thing the
+      // region does or the disabled state is visible in a list and invisible in the editor.
+      if (!clip.target().dispatchable()) {
+        slot.flags |= daw::kUiAutomationFlagTargetDisabled;
+      }
       for (const auto& pt : clip.points()) {
         if (slot.pointCount >= daw::kUiMaxAutomationPoints) {
           ++slot.pointsTruncated;  // the real total, not "at least one"
@@ -204,6 +265,28 @@ void handleWriteAutomationPoint(AutomationCommandDeps& deps,
   const uint64_t tick =
       (static_cast<uint64_t>(ap.nanotickHi) << 32) | ap.nanotickLo;
   const bool discrete = (ap.flags & daw::kUiAutomationDiscrete) != 0;
+  // BEFORE THE TRACK LOCK — see handleSetAutomationTarget for why. projectHoldsDevice takes
+  // tracksMutex and every track's own trackMutex; calling it from inside runtime->trackMutex
+  // re-acquires that same non-recursive mutex and deadlocks.
+  daw::AutomationTarget wireTarget;
+  const char* targetRefusal = nullptr;
+  if (!daw::automationTargetFromWire(ap.targetPluginIndex, wireTarget)) {
+    targetRefusal = "not_a_device_identity";
+  } else if (wireTarget.kind == daw::AutomationTargetKind::StableDevice &&
+             !projectHoldsDevice(tracks, tracksMutex, wireTarget.stableDeviceId)) {
+    targetRefusal = "no_such_device_in_project";
+  }
+  if (targetRefusal != nullptr) {
+    DAW_EVENT("automation.target_rejected")
+        .field("track", ap.trackId)
+        .field("target", ap.targetPluginIndex)
+        .field("reason", targetRefusal);
+    // JOURNALLED TOO. daw-agent's refusal wait reads the journal, so a refusal that only reaches
+    // the event log is a refusal the caller reports as "sent": true.
+    historyAppend("write_automation_point",
+                  (std::string("rejected:") + targetRefusal).c_str(), ap.trackId, 0, "");
+    return;
+  }
   uint32_t pointCount = 0;
   bool created = false;
   {
@@ -218,8 +301,7 @@ void handleWriteAutomationPoint(AutomationCommandDeps& deps,
     if (!clip) {
       // discreteOnly belongs to the CLIP, so it is fixed at creation. A flag that
       // changed meaning halfway through a curve would make the curve unreadable.
-      runtime->track.automationClips.emplace_back(paramId, discrete,
-                                                  ap.targetPluginIndex);
+      runtime->track.automationClips.emplace_back(paramId, discrete, wireTarget);
       clip = &runtime->track.automationClips.back();
       created = true;
     }

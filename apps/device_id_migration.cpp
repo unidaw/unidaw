@@ -3,6 +3,7 @@
 #include <set>
 #include <sstream>
 
+#include "apps/automation_target.h"
 #include "apps/stable_device_id.h"
 
 namespace daw {
@@ -162,6 +163,24 @@ bool migrateTrackScopedDeviceIds(ProjectDocument& document,
   // dangling reference, and it fails the load rather than being rebound or dropped: rebinding
   // plays the wrong parameter, and dropping loses a modulation the user authored without saying so.
   for (auto& track : document.tracks) {
+    // AUTOMATION TARGETS FOLLOW THEIR DEVICE, exactly as mod links do. Only a StableDevice target
+    // names a device at all: All names the track, and DisabledLegacyCompact deliberately names
+    // nothing this build can resolve (apps/automation_target.h).
+    for (auto& clip : track.automationClips) {
+      if (clip.target().kind != AutomationTargetKind::StableDevice) {
+        continue;
+      }
+      // KEYED ON THIS TRACK, and correctly so: a schema 1-5 `target_device_id` was a
+      // TRACK-SCOPED id, so the only device it could ever have named is one on its own track.
+      // The project-wide reading above applies to schema 6, where ids are global.
+      const auto moved = migration.map.find({track.trackId, clip.target().stableDeviceId});
+      if (moved == migration.map.end()) {
+        setError(error, "dangling automation target: " +
+                            describe(track.trackId, clip.target().stableDeviceId));
+        return false;
+      }
+      clip.setTarget(AutomationTarget::device(moved->second));
+    }
     for (auto& link : track.modLinks) {
       const auto source = migration.map.find({track.trackId, link.source.deviceId});
       if (source == migration.map.end()) {
@@ -253,6 +272,39 @@ bool validateGlobalDeviceIds(const ProjectDocument& document, std::string* error
   // A REFERENCE NAMES A DEVICE ON ITS OWN TRACK. Modulation is within-track by construction — a
   // link's source and target are both devices of the track that holds the link — so a global id
   // that resolves to a DIFFERENT track is as dangling as one that resolves to nothing.
+  // AUTOMATION TARGETS ARE DEVICE REFERENCES TOO. A lane pointing at a device the project does
+  // not hold would dispatch to nothing and say nothing, which is the shape this whole record
+  // exists to remove.
+  for (const auto& track : document.tracks) {
+    for (const auto& clip : track.automationClips) {
+      if (!automationTargetIsValid(clip.target())) {
+        setError(error, "malformed automation target on track " + std::to_string(track.trackId));
+        return false;
+      }
+      if (clip.target().kind != AutomationTargetKind::StableDevice) {
+        continue;
+      }
+      // THE PROJECT MUST HOLD IT — not this track specifically.
+      //
+      // R-STABLE-DEVICE-TARGETS: "The global id alone is therefore an unambiguous patcher owner
+      // in SHM and editor commands EVEN WHEN DEVICES LIVE ON DIFFERENT TRACKS." An earlier
+      // version required the target to live on the lane's own track, borrowed from the mod-link
+      // rule three blocks down — but that rule rests on a fact about MODULATION ("within-track by
+      // construction"), not about automation, and nothing in the contract extends it here.
+      //
+      // WHAT DISPATCH DOES WITH A CROSS-TRACK TARGET, stated rather than left to be discovered:
+      // it resolves the compact host index within the lane's OWN track and finds nothing, so the
+      // lane dispatches no points. Resolving across tracks needs the session ExecutionSnapshot
+      // (R-HOST-PLAN-AUTHORITY), which is a later step of this same change. No shipped client can
+      // author such a lane today.
+      if (ownerTrack.find(clip.target().stableDeviceId) == ownerTrack.end()) {
+        setError(error, "dangling automation target: " +
+                            describe(track.trackId, clip.target().stableDeviceId));
+        return false;
+      }
+    }
+  }
+
   const auto ownedByTrack = [&](uint32_t deviceId, uint32_t trackId) {
     const auto owner = ownerTrack.find(deviceId);
     return owner != ownerTrack.end() && owner->second == trackId;

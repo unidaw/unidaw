@@ -116,9 +116,11 @@ def main():
             }
 
     tests = set()
+    test_statements = {}
     for manifest in manifests.values():
         for case in manifest["test_cases"]:
             tests.add(case["id"])
+            test_statements[case["id"]] = case.get("statement", "")
 
     record_steps = step_map["record_steps"]
     not_landed = step_map["records_not_landed"]
@@ -214,7 +216,42 @@ def main():
             if record_steps[rid] > step:
                 fail(f"test {tid} is at step {step} but binds {rid} at step {record_steps[rid]}")
 
-    # ---- 8. the prose is GENERATED, never hand-maintained --------------------
+    # ---- 8. every recorded deviation names a real, landed record --------------
+    #
+    # A deviation from a frozen contract is a thing a reviewer must be able to find. Kept as free
+    # text it is a note; kept here, against a record id the checker resolves, it is an ENTRY —
+    # and one naming a record that does not exist, or one nothing lands, fails.
+    for deviation in step_map.get("recorded_deviations", []):
+        rid = deviation.get("record", "")
+        if rid not in records:
+            fail(f"recorded deviation names {rid!r}, which no manifest contains")
+            continue
+        if rid not in record_steps:
+            fail(f"recorded deviation names {rid}, which no step lands")
+        for field in ("requires", "implemented", "why", "residual", "found_by"):
+            if not deviation.get(field, "").strip():
+                fail(f"recorded deviation for {rid} has no {field}")
+        if deviation.get("step") not in valid_steps:
+            fail(f"recorded deviation for {rid} names step {deviation.get('step')!r}, "
+                 f"which does not exist")
+        # A DEVIATION MAY BE ABOUT A TEST CASE RATHER THAN A RECORD, and then the quote has to
+        # resolve against THAT statement. Checking every quote against the record's statement
+        # rejected a correct entry the first time this ran — the checker being wrong about where
+        # the sentence lives, not the entry being wrong.
+        source = records[rid]["statement"]
+        tid = deviation.get("test")
+        if tid:
+            if tid not in test_statements:
+                fail(f"recorded deviation for {rid} names test {tid!r}, "
+                     f"which no manifest contains")
+                continue
+            source = test_statements[tid]
+        quoted = deviation.get("requires", "")
+        if quoted and quoted not in source:
+            fail(f"recorded deviation for {rid} quotes text absent from "
+                 f"{tid or rid}'s frozen statement: {quoted[:60]!r}")
+
+    # ---- 9. the prose is GENERATED, never hand-maintained --------------------
     #
     # The convergence protocol's rule, applied to this plan: "Packet prose, summaries, counts,
     # dependency diagrams, and self-checks MUST be generated from or mechanically checked against
@@ -306,6 +343,24 @@ def render_markdown(step_map, records, record_steps, test_steps):
         w(f"| `{tid}` | {binding['step']} | " +
           ", ".join(f"`{r}`" for r in binding["records"]) + f" | {binding['why']} |")
     w("")
+    if step_map.get("recorded_deviations"):
+        w("## Recorded deviations from the frozen contract")
+        w("")
+        w("Each row is a place the implementation does NOT do what the record literally says. "
+          "They are here because a deviation nobody wrote down is indistinguishable from a "
+          "defect nobody found — and because the checker resolves the record id and the quoted "
+          "requirement, so an entry cannot drift away from the sentence it is about.")
+        w("")
+        for deviation in step_map["recorded_deviations"]:
+            w(f"### `{deviation['record']}` — step {deviation['step']}")
+            w("")
+            w(f"- **The record requires:** \"{deviation['requires']}\"")
+            w(f"- **What is implemented:** {deviation['implemented']}")
+            w(f"- **Why:** {deviation['why']}")
+            w(f"- **Residual:** {deviation['residual']}")
+            w(f"- **Found by:** {deviation['found_by']}")
+            w("")
+
     w("## Gate at every step")
     w("")
     for line in step_map["per_step_gate"]:
@@ -332,6 +387,8 @@ def report(step_map, record_count, test_count):
           f"({len(landed)} landed, {len(step_map['records_not_landed'])} excused)")
     print(f"  frozen tests: {test_count} (all bound)")
     print(f"  textual edges: {len(step_map.get('textual_edges', []))} (all quoted and backward)")
+    print(f"  recorded deviations: {len(step_map.get('recorded_deviations', []))} "
+          f"(each naming a landed record and quoting its frozen statement)")
     per_step = {}
     for rid, step in landed.items():
         per_step.setdefault(step, []).append(rid)

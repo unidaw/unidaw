@@ -137,6 +137,7 @@ add_library(engine_core STATIC
   apps/event_log.cpp
   apps/project_file.cpp
   apps/device_id_migration.cpp
+  apps/automation_target.cpp
   apps/harmony_timeline.cpp
   apps/scale_library.cpp
   apps/ui_snapshot.cpp
@@ -358,6 +359,7 @@ add_executable(daw_lint
   apps/event_log.cpp
   apps/project_file.cpp
   apps/device_id_migration.cpp
+  apps/automation_target.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -374,6 +376,7 @@ add_executable(project_file_tests
   apps/event_log.cpp
   apps/project_file.cpp
   apps/device_id_migration.cpp
+  apps/automation_target.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -395,6 +398,7 @@ add_executable(device_id_migration_tests
   apps/event_log.cpp
   apps/project_file.cpp
   apps/device_id_migration.cpp
+  apps/automation_target.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -408,6 +412,28 @@ target_include_directories(device_id_migration_tests PRIVATE
 )
 
 target_link_libraries(device_id_migration_tests PRIVATE platform_juce)
+
+# AE-P1.2 G2-B item 18, R-PROJECT-TARGET-MIGRATION: what an automation lane drives, as a tag —
+# and the legacy compact index that is disabled rather than guessed.
+add_executable(automation_target_tests
+  apps/automation_target_tests_main.cpp
+  apps/event_log.cpp
+  apps/project_file.cpp
+  apps/device_id_migration.cpp
+  apps/automation_target.cpp
+  apps/device_chain.cpp
+  apps/plugin_cache.cpp
+  apps/patcher_preset.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+)
+
+target_include_directories(automation_target_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+
+target_link_libraries(automation_target_tests PRIVATE platform_juce)
 
 # Header-only numeric tests for the waveform pyramid (no JUCE/Boost needed).
 add_executable(waveform_pyramid_tests
@@ -527,6 +553,7 @@ add_executable(placement_adds_tests
   apps/placement_adds_tests_main.cpp
   apps/project_file.cpp
   apps/device_id_migration.cpp
+  apps/automation_target.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
   apps/patcher_preset.cpp
@@ -1005,6 +1032,11 @@ add_test(NAME device_id_migration
   COMMAND device_id_migration_tests
 )
 set_tests_properties(device_id_migration PROPERTIES TIMEOUT 120)
+
+add_test(NAME automation_target
+  COMMAND automation_target_tests
+)
+set_tests_properties(automation_target PROPERTIES TIMEOUT 120)
 
 add_test(NAME waveform_pyramid
   COMMAND waveform_pyramid_tests

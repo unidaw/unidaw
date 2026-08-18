@@ -151,6 +151,52 @@ bool clearDeviceEuclideanConfig(TrackChain& chain, uint32_t deviceId);
 // say about them, and the switch is where anyone adding a kind would look.
 uint8_t capabilityMaskForKind(DeviceKind kind);
 
+// WHICH DEVICES OCCUPY A COMPACT HOST SLOT, in order.
+//
+// A host process holds a dense list of plugins and a parameter is addressed by POSITION in it. The
+// position is NOT the device's position in the chain: a patcher or sampler device takes no slot,
+// and neither does a device whose plugin does not resolve here.
+//
+// THE AUTHORITY IS rebuildHostForChain (apps/engine_chain_host.cpp), which is what actually builds
+// `pluginPaths`. This walk must agree with it exactly, and the filter is therefore KIND plus
+// RESOLVABILITY — and nothing else.
+//
+// BYPASS IS NOT A FILTER, and getting that wrong is the reason this comment is long. A bypassed
+// plugin is still LOADED and still holds its slot: daw_engine_main.cpp sends
+// `sendSetBypass(hostIndex, device.bypass)`, which needs the index of a device it is about to
+// bypass. An earlier version of this function skipped bypassed devices, so on a chain of
+// [A bypassed, B] the host list was [A, B] while this said B was index 0 — every parameter aimed
+// at B landed on A, and nothing structural could see it.
+//
+// That filter came from a DIFFERENT question that happened to be spelled as a similar loop: "which
+// plugin should an all-target parameter go to", where preferring a non-bypassed one is a sensible
+// preference. Two questions, one shape. Merging them made the preference into part of the address.
+// The preference belongs at the call site, expressed OVER this walk — see engine_render_track.cpp.
+//
+// `occupiesSlot(device)` answers "does this device's plugin actually load here", and must be the
+// same test rebuildHostForChain applies. A template parameter rather than a std::function because
+// this runs per lane, per block, on the producer path.
+//
+// `fn(index, device)` returns false to stop.
+template <typename OccupiesSlot, typename Fn>
+void forEachHostedDevice(const std::vector<Device>& devices,
+                         OccupiesSlot&& occupiesSlot,
+                         Fn&& fn) {
+  uint32_t index = 0;
+  for (const auto& device : devices) {
+    if (device.kind != DeviceKind::VstInstrument && device.kind != DeviceKind::VstEffect) {
+      continue;
+    }
+    if (!occupiesSlot(device)) {
+      continue;
+    }
+    if (!fn(index, device)) {
+      return;
+    }
+    index++;
+  }
+}
+
 // A head-of-chain VST instrument, ready to hand to daw::addDevice.
 //
 // Three sites built this identically and differed only in hostSlotIndex — VstInstrument for the

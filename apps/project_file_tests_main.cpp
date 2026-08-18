@@ -805,7 +805,19 @@ int main(int argc, char** argv) {
     {
       daw::ProjectDocument autoDoc;
       autoDoc.tracks.emplace_back();
-      daw::AutomationClip clip("index:7", /*discreteOnly=*/true, /*target=*/3);
+      // THE LANE'S TARGET MUST NAME A DEVICE THE TRACK HOLDS. A StableDevice target pointing at
+      // nothing is a dangling reference and the loader refuses it (R-DEVICE-ID-LIFETIME), so a
+      // fixture that omitted the device would be testing the refusal rather than the round trip.
+      {
+        daw::Device target;
+        target.id = 3;
+        target.kind = daw::DeviceKind::VstEffect;
+        autoDoc.tracks[0].chain.devices.push_back(target);
+      }
+      require(daw::raiseDeviceIdWatermark(autoDoc), "the automation fixture needs a watermark");
+      // A DEVICE, not a compact host index. See apps/automation_target.h.
+      daw::AutomationClip clip("index:7", /*discreteOnly=*/true,
+                               daw::AutomationTarget::device(3));
       clip.addPoint({0, 0.25f});
       clip.addPoint({960000, 0.75f});
       autoDoc.tracks[0].automationClips.push_back(std::move(clip));
@@ -817,7 +829,8 @@ int main(int argc, char** argv) {
       const auto& got = back.tracks[0].automationClips[0];
       require(got.paramId() == "index:7", "automation param id lost");
       require(got.discreteOnly(), "automation discrete flag lost");
-      require(got.targetPluginIndex() == 3, "automation target plugin lost");
+      require(got.target() == daw::AutomationTarget::device(3),
+              "automation target device lost");
       require(got.points().size() == 2, "automation points lost");
       require(got.points()[1].nanotick == 960000, "automation point tick lost");
       require(got.points()[1].value > 0.74f && got.points()[1].value < 0.76f,

@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "apps/automation_target.h"
 #include "apps/event_payloads.h"
 
 namespace daw {
@@ -23,10 +24,10 @@ class AutomationClip {
  public:
   explicit AutomationClip(std::string paramId,
                           bool discreteOnly = false,
-                          uint32_t targetPluginIndex = kParamTargetAll)
+                          AutomationTarget target = AutomationTarget::all())
       : paramId_(std::move(paramId)),
         discreteOnly_(discreteOnly),
-        targetPluginIndex_(targetPluginIndex) {}
+        target_(std::move(target)) {}
 
   // Writing at a tick that already has a point REPLACES it. Inserting unconditionally (as
   // this used to) meant a point could never be corrected: writing a new value at the same
@@ -166,8 +167,14 @@ class AutomationClip {
     return moved;
   }
   bool discreteOnly() const { return discreteOnly_; }
-  uint32_t targetPluginIndex() const { return targetPluginIndex_; }
-  void setTargetPluginIndex(uint32_t target) { targetPluginIndex_ = target; }
+  // WHAT THIS LANE DRIVES — see apps/automation_target.h for why it is a tag and not a number.
+  //
+  // This was `uint32_t targetPluginIndex()`, a COMPACT HOST INDEX: a position in the list of
+  // resolvable, non-bypassed VST devices on the track, counted at dispatch. That number is a
+  // property of one machine at one moment, and persisting it as authored data made a lane point
+  // at a different plugin after any install, bypass or reorder.
+  const AutomationTarget& target() const { return target_; }
+  void setTarget(AutomationTarget target) { target_ = std::move(target); }
 
   // EQUALITY IS THE CLASS'S OWN BUSINESS, and that is deliberate.
   //
@@ -183,13 +190,13 @@ class AutomationClip {
   // correct layering rather than an exception.
   friend bool operator==(const AutomationClip& a, const AutomationClip& b) {
     return a.paramId_ == b.paramId_ && a.discreteOnly_ == b.discreteOnly_ &&
-           a.targetPluginIndex_ == b.targetPluginIndex_ && a.points_ == b.points_;
+           a.target_ == b.target_ && a.points_ == b.points_;
   }
 
  private:
   std::string paramId_;
   bool discreteOnly_ = false;
-  uint32_t targetPluginIndex_ = kParamTargetAll;
+  AutomationTarget target_{};
   std::vector<AutomationPoint> points_;
 };
 
