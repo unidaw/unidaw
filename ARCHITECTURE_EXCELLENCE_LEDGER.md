@@ -6688,6 +6688,38 @@ registration set is collected from the very declarations it validates, which dis
 routing compiler enforces correctly; and twelve one-line mutations still leave both test binaries
 green, including deleting the writer lock from the publication transaction. Those are open.
 
+### Step 2 revisited under the standard step 4 set
+
+Asked directly whether the earlier steps were up to this standard, the honest answer was **one place,
+in step 2**, and it has been fixed.
+
+`ArtifactEntry` stored `leafName`, `size` and `sha256` as public fields when all three are DERIVED —
+from `{trackId, globalDeviceId, kind}` and from the bytes. Three of `validateArtifactInventory`'s
+eight checks existed only to catch what a caller could then write into them. That is the identical
+shape to the snapshot's, and a reviewer had already found a related symptom (an unreachable
+duplicate branch, and the generation check needing to recompute rather than compare).
+
+Every field is private now, with two ways to obtain an entry: `forBytes(...)`, which computes the
+derived three and **cannot** produce a wrong entry, and `fromDocument(...)`, which is where a file's
+lie is refused — at the boundary the untrusted bytes cross, rather than in a validator one layer in.
+Five mutation paths (direct field write, write through an accessor, changing the identity so the
+leaf goes stale, a bad digest, aggregate initialisation) are all compile errors, verified one at a
+time. The two checks they replace were then **removed**, because defensive code guarding a door that
+no longer exists is its own defect — and this file had already had one unreachable branch found in
+review.
+
+Steps 1 and 3 were audited against the same standard and left alone, with reasons rather than
+assurances. Step 1's real invariant is the watermark and `DeviceIdWatermark` already encapsulates it
+(`adopt()` takes the max, so undo cannot lower it by construction); a newtype for the device id
+would end at the first SHM/wire/Rust boundary, where it must be a plain integer anyway. Step 3's
+`RoutingGraph` was hand-constructible in principle, and step 4 removed the case that mattered by
+making it private inside the snapshot.
+
+**The general point:** the earlier steps were held to *"is every rule checked?"* and step 4 was held
+to *"can the wrong state exist?"*. The second standard is strictly better, and the honest consequence
+is going back for the places where it changes the answer rather than declaring earlier work fine
+because it passed a review written against the weaker one.
+
 ### Process errors, recorded because they cost measurement
 
 Engine checks were run **standalone while a full ctest run was in progress**. Both launch engines and
@@ -6700,3 +6732,11 @@ Separately: a control sweep's restore left a stale object file, so the tests rep
 was not in the source. And a first attempt at reproducing eight bypasses produced eight "failures"
 that were **all** the sandbox's unresolved packet path — a control that fails for a reason unrelated
 to what it tests is not a control.
+
+**And then it happened again, which makes it a rule rather than a note.** A second full suite was
+started and then invalidated at test 82 by a `cmake --build` for the next piece of work — the same
+error, one turn after writing the first one down. Writing "do not run engine checks beside a suite"
+was not enough, because the actual hazard is broader: **a suite is a measurement of a fixed tree, so
+nothing may change the tree while it runs — not another engine, and not a rebuild.** The working
+rule is now: finish the code, then run one suite, and start no suite while any code change is still
+intended.
