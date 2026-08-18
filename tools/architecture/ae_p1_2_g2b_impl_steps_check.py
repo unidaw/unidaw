@@ -36,6 +36,7 @@ PLAN closes. The per-step and completion gates in the map are what check the pro
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -251,6 +252,28 @@ def main():
             fail(f"recorded deviation for {rid} quotes text absent from "
                  f"{tid or rid}'s frozen statement: {quoted[:60]!r}")
 
+        # AND EVERY QUOTATION IN `why`, which is where the last misquote actually lived.
+        #
+        # This checked `requires` only. A reviewer found a `why` that had capitalised part of the
+        # record's sentence for emphasis INSIDE its own quote marks — the one thing a quotation may
+        # not do — and the fix restored the text without extending the guard to the field, so the
+        # same defect could recur there in silence. A rule that only watches the field where a
+        # defect did not happen is a rule chosen by where it was easy to look.
+        #
+        # DOUBLE QUOTES ONLY, and that is not a style preference. The first version matched
+        # single-quoted spans and immediately reported three false positives — "the record's own
+        # sentence", "that object's" — because an apostrophe in ordinary prose is the same
+        # character. Widening or excepting my way out of that is how a pattern grows until it
+        # matches everything; the fix is a delimiter prose does not use.
+        #
+        # Only spans long enough to be a claim are checked. A short one is a term of art
+        # ("None", "Track", "audio_out"), not a quotation of the record, and demanding those match
+        # verbatim would make the field unwritable.
+        for span in re.findall(r'"([^"]{25,})"', deviation.get("why", "")):
+            if span not in source:
+                fail(f"recorded deviation for {rid} quotes text in `why` that is absent from "
+                     f"{tid or rid}'s frozen statement: {span[:70]!r}")
+
     # ---- 9. the prose is GENERATED, never hand-maintained --------------------
     #
     # The convergence protocol's rule, applied to this plan: "Packet prose, summaries, counts,
@@ -272,8 +295,131 @@ def main():
             fail(f"{os.path.relpath(md_path, ROOT)} is not the generated prose for this map; "
                  f"re-run with --write")
 
+    # ---- 10. the routing matrix is MIRRORED INTO C++, byte-verified ---------
+    #
+    # T-ROUTING-MATRIX: "The implementation ITERATES the exact 5x4 routing_matrix: all 20 lane/kind
+    # rows produce the declared validity, effect, and id result ... with no implicit default case."
+    #
+    # ITERATES, not restates. A fixture that spelled the 20 rows out in C++ would be a second
+    # statement of the table, and the two would agree until somebody edited one — which is the
+    # failure this whole effort is about. So the table is EMITTED from the frozen packet into a
+    # header the fixture iterates, and byte-verified here on every run. Editing the header by hand
+    # fails this check; editing the packet is impossible, because it is frozen and pinned by digest
+    # above.
+    matrix_header = render_routing_matrix_header(manifests["item18"]["routing_matrix"])
+    header_path = os.path.join(ROOT, "apps", "routing_matrix_generated.h")
+    if "--write" in sys.argv:
+        with open(header_path, "w", encoding="utf-8") as handle:
+            handle.write(matrix_header)
+    else:
+        actual_header = ""
+        if os.path.isfile(header_path):
+            with open(header_path, "r", encoding="utf-8") as handle:
+                actual_header = handle.read()
+        if actual_header != matrix_header:
+            fail("apps/routing_matrix_generated.h is not the frozen routing_matrix for this "
+                 "packet; re-run with --write")
+
     report(step_map, len(records), len(tests))
     return 1 if failures else 0
+
+
+def render_routing_matrix_header(matrix):
+    """The frozen 20-row table as a C++ array the routing fixture iterates.
+
+    Emitted rather than hand-written, and byte-compared on every run: see rule 10.
+    """
+    out = []
+    w = out.append
+    w("#pragma once")
+    w("")
+    w("// GENERATED from the AE-P1.2 G2-B item-18 packet's `routing_matrix` by")
+    w("// tools/architecture/ae_p1_2_g2b_impl_steps_check.py --write. DO NOT EDIT BY HAND: the")
+    w("// checker byte-compares this file against the frozen packet, so a hand edit fails rather")
+    w("// than quietly becoming a second version of the table.")
+    w("//")
+    w("// NOT \"on every run\", which is what this used to say. The comparison is rule 10, and the")
+    w("// checker returns before it if EITHER packet\'s pin fails to resolve — a missing worktree,")
+    w("// a moved HEAD, a changed manifest digest. It fails loudly in that case rather than")
+    w("// passing, so nothing is certified silently; but the byte-comparison itself is skipped,")
+    w("// and this file is then only as trustworthy as the last run in which the pins resolved.")
+    w("//")
+    w("// T-ROUTING-MATRIX requires the implementation to ITERATE the exact 5x4 matrix. This is")
+    w("// what it iterates.")
+    w("")
+    w("#include <cstddef>")
+    w("")
+    w("namespace daw::generated {")
+    w("")
+    w("struct RoutingMatrixRow {")
+    w("  const char* lane;")
+    w("  const char* kind;")
+    w("  bool valid;")
+    w("  const char* effect;")
+    w("  const char* idRule;")
+    w("};")
+    w("")
+    lanes = ", ".join(cxx_string(lane) for lane in matrix["lanes"])
+    kinds = ", ".join(cxx_string(kind) for kind in matrix["kinds"])
+    w(f"inline constexpr const char* kRoutingLanes[] = {{{lanes}}};")
+    w(f"inline constexpr const char* kRoutingKinds[] = {{{kinds}}};")
+    w("")
+    w("inline constexpr RoutingMatrixRow kRoutingMatrix[] = {")
+    for row in matrix["rows"]:
+        w(f'    {{{cxx_string(row["lane"])}, {cxx_string(row["kind"])}, '
+          f'{"true" if row["valid"] else "false"},')
+        w(f'     {cxx_string(row["effect"])}, {cxx_string(row["id_rule"])}}},')
+    w("};")
+    w("")
+    w(f"inline constexpr size_t kRoutingMatrixRows = {len(matrix['rows'])};")
+    w("")
+    w("// The normalization rules, verbatim, so a fixture can quote the sentence it is testing")
+    w("// rather than paraphrasing it.")
+    for key, value in sorted(matrix["normalization"].items()):
+        if isinstance(value, list):
+            joined = ", ".join(str(item) for item in value)
+            w(f"//   {key}: [{joined}]")
+        else:
+            for line in wrap_comment(f"{key}: {value}"):
+                w(f"//   {line}")
+    w("")
+    w("}  // namespace daw::generated")
+    w("")
+    return "\n".join(out)
+
+
+def cxx_string(text):
+    """A C++ string literal for `text`, escaped.
+
+    The first version interpolated the packet's strings straight into quotes. A `"` would have
+    broken the build loudly, which is survivable; a BACKSLASH would not have — `"trackId=0\\inputId=0"`
+    compiles with a warning and evaluates to `trackId=0inputId=0`, so the emitted table would
+    quietly differ from the frozen one it is supposed to mirror. The byte-comparison cannot catch
+    that: it compares this generator's output to itself.
+    """
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    for raw, code in (("\n", "\\n"), ("\r", "\\r"), ("\t", "\\t")):
+        escaped = escaped.replace(raw, code)
+    if any(ord(ch) < 0x20 for ch in escaped):
+        raise SystemExit(
+            f"routing_matrix holds a control character this generator will not emit: {text!r}")
+    return f'"{escaped}"'
+
+
+def wrap_comment(text, width=92):
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        candidate = word if not current else current + " " + word
+        if len(candidate) > width and current:
+            lines.append(current)
+            current = "    " + word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
 
 
 def render_markdown(step_map, records, record_steps, test_steps):

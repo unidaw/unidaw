@@ -452,6 +452,22 @@ target_link_libraries(automation_target_tests PRIVATE platform_juce)
 add_executable(sha256_tests apps/sha256_tests_main.cpp apps/sha256.cpp)
 target_include_directories(sha256_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# THE 20-ROW ROUTING MATRIX, iterated from the frozen packet rather than restated in C++.
+# apps/routing_matrix_generated.h is emitted by tools/architecture/ae_p1_2_g2b_impl_steps_check.py
+# and byte-compared against the packet whenever its pins resolve, so this fixture and the contract
+# cannot drift. The checker fails rather than skips when a pin does not resolve.
+add_executable(routing_graph_tests
+  apps/routing_graph_tests_main.cpp
+  apps/routing_graph.cpp
+)
+target_include_directories(routing_graph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# -Werror=switch IS THE CLAIM. routing_graph.h says a new lane or kind is "a compile error rather
+# than a silent fallthrough" — which was FALSE without this flag: a reviewer added
+# RoutingLane::ControlOut and got 0 errors, 7 warnings and a passing fixture. The repo already
+# owns this idiom for daw_engine and the command sources; a target that makes the claim and does
+# not carry the flag is stating a property of a build nobody runs.
+target_compile_options(routing_graph_tests PRIVATE -Werror=switch -Werror=unused-variable)
+
 # The four presence rows, the identity rules, the legacy migration's empty inventory, and the
 # manifest's embedded {track, device} key. NOT the stale-canonical-path case, which is about which
 # paths the loader builds and is covered by tools/artifact_path_construction_check.sh and, at
@@ -1878,6 +1894,21 @@ add_test(NAME artifact_path_construction
 )
 set_tests_properties(artifact_path_construction PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+# THE STEP MAP AND EVERY ARTIFACT GENERATED FROM IT, checked against the frozen packets.
+#
+# This was not in the suite, which meant apps/routing_matrix_generated.h — a mirror of the frozen
+# 20-row table — was byte-verified only when someone remembered to run the checker by hand. A guard
+# that exists and is not invoked reads as coverage and provides none.
+#
+# It FAILS rather than skips when the two packet worktrees are absent, deliberately: the step map
+# pins them by commit AND manifest digest, and a checker that quietly skips is how a pin stops
+# being verified without anyone deciding that it should.
+add_test(NAME impl_step_map
+  COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/architecture/ae_p1_2_g2b_impl_steps_check.py
+)
+set_tests_properties(impl_step_map PROPERTIES TIMEOUT 120)
+add_test(NAME routing_matrix COMMAND routing_graph_tests)
+set_tests_properties(routing_matrix PROPERTIES TIMEOUT 120)
 # The control that would have caught the laundering: a legacy manifest whose embedded pair does
 # not match its own filename must FAIL the load, not be silently restamped to agree.
 add_test(NAME artifact_legacy_key

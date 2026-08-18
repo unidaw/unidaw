@@ -178,6 +178,14 @@ Each row is a place the implementation does NOT do what the record literally say
 - **Residual:** T-PROJECT-TARGET-MIGRATION closes at step 4 and must either land the four fixtures or carry this argument.
 - **Found by:** independent review of the step-2 diff
 
+### `R-ROUTING-AUTHORITY` — step 3
+
+- **The record requires:** "each source has at most one Track or Master sink"
+- **What is implemented:** Source cardinality is enforced on the two COMPLEMENTARY media (midi_out/midi_in and audio_out/audio_in) and deliberately NOT on the sidechain lane, so one source may key any number of destinations.
+- **Why:** The record's own sentence scopes the rule: "For complementary MIDI and audio lanes, one-sided Track declarations create an edge, exact input/output duplicates coalesce once, each source has at most one Track or Master sink" — the scope is in the opening clause. The machine-readable normalization object states the same rule as 'For each media lane', and sidechain IS a media lane in that object's own vocabulary, so the two disagree. The record wins, for a reason the record also gives: "A sidechain Track edge is additive key input and does not change source audioOut." A key edge that consumed the source's one destination would make one kick unable to key two compressors, and would make keying mutually exclusive with reaching master — which is not a routing rule anyone could use.
+- **Residual:** None in behaviour. The divergence is between two statements of the same rule in the frozen packet, not between the packet and the implementation; it is recorded here so the choice is visible rather than discovered in the code.
+- **Found by:** independent review of the step-3 diff
+
 ## Gate at every step
 
 - cmake --build build is clean, checked as grep -c 'error:' == 0 on the build log, read before anything is committed.
