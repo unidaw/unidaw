@@ -6833,3 +6833,72 @@ was not enough, because the actual hazard is broader: **a suite is a measurement
 nothing may change the tree while it runs — not another engine, and not a rebuild.** The working
 rule is now: finish the code, then run one suite, and start no suite while any code change is still
 intended.
+
+---
+
+## Item 18: N−1 delivery, and a check whose noise exceeded its signal
+
+R-ROUTING-AUTHORITY requires that every MIDI, audio and sidechain Track edge deliver the source's
+fully rendered block N−1 to destination block N, and that **runtime or worker order cannot change
+same- versus next-block delivery**. The producer used ONE inbound buffer per track: a destination
+consumed it at the start of its block, a source wrote it at the end of that same block. Whichever ran
+first decided what the destination heard — and that order came from the work partition, so it could
+change with the track ids.
+
+The fix is two slots chosen by the block's parity, which removes the dependence instead of pinning an
+order. It is written as a NAMED rule (`apps/inbound_block_parity.h`) rather than inline at the two
+call sites, and that naming is the whole reason any of it is verified.
+
+### The check that had to be thrown away
+
+The natural test renders one project twice with the track ids swapped — which swaps their processing
+order — and requires the audio to land the same way. It was written, and it is **too noisy to
+trust**: across eight consecutive runs, three disagreed, with a render's audio ending three to four
+blocks earlier than the other five, **in either direction and independently of the routing**. The
+property being looked for is a two-block difference. The noise is larger than the signal.
+
+The script is committed with that written in its header, and deliberately **not** registered in
+ctest, with CMakeLists stating why at the point a reader would otherwise add it. An unregistered
+check that explains itself is worth more than a registered one that fails at random — but only if the
+explanation sits where the next person will be standing when they reach for it.
+
+### Dismissing a disagreement as an outlier
+
+Before that, this same check was reported as discriminating in both directions, with numbers offered
+as evidence the fix worked. The sequence was: **one run disagreed, three then agreed, and the
+disagreement was dismissed as an outlier.** It was not an outlier — it was the intermittent behaviour
+the eight-run sample later showed at 3-in-8.
+
+The general shape: **runs that follow a disagreement look exactly like a signal**. Agreement after
+noise is the expected appearance of noise, not evidence against it. The cost here was a claim made to
+the owner and then retracted; the correction had to name the claim, not just replace the number.
+
+### What is verified, and the part that is not
+
+`inbound_block_parity` tests the rule over the full `uint32_t` range in both directions — a write is
+never read by its own block, and always by the next. It also covers the **wrap**, which reasoning got
+right and nothing tested: `0xFFFFFFFF` has parity 1 and the next value 0 has parity 0, so the
+alternation survives it *because 2³² is even*. A counter taken modulo an odd number before the parity
+was derived would repeat a parity there, and one block would consume what the block before it
+consumed.
+
+What is **not** verified is the change end-to-end. That is stated in the commit, in the test's header
+and here, rather than left for a reader to infer from the absence of a check. The fix is sound by
+construction and matches the engine's own description of the defect; the behaviour is not
+demonstrated.
+
+**The naming is what made the difference.** Inline, the arithmetic was only testable through the
+audio path — the one path too noisy to measure. Given a name and a header, the rule became testable
+apart from what it governs. *When the only available end-to-end check is unreliable, extracting the
+rule is not a style preference; it is the difference between evidence and none.*
+
+### Two gaps left open rather than papered over
+
+- **The sidechain edge is not N−1.** It is pulled from the source's SHM under `try_to_lock`, so it
+  delivers whatever is there when the lock is free. R-ROUTING-AUTHORITY names sidechain alongside
+  MIDI and audio; this change does not cover it.
+- **The serial group stays.** It holds routed tracks for two reasons and this removes only one:
+  delivery order is now fixed, but fan-in accumulation is still a float `+=` whose result depends on
+  arrival order. Removing the group now would be **claiming half a change**. What did change is the
+  comment above it, which no longer justifies itself with the half that is gone — a stale
+  justification for a live mechanism is how the next reader concludes the mechanism is unnecessary.
