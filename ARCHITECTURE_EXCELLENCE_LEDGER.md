@@ -6251,3 +6251,123 @@ dedicated product implementation worktree from exact clean baseline
 in bounded, reviewed slices. The packet worktrees remain frozen at item 15 `8ee5b3cd` and item 18
 `34f0d7b3`; any packet change requires a named successor and fresh dual review. Fleet drain or
 restart state was not inferred or changed during this handoff.
+
+## AE-P1.2 G2-B implementation step 1: project-global device ids (2026-08-18)
+
+Implementation of the combined item-15/item-18 contract started. Branch
+`ae/p1-2-g2b-implementation`, worktree `/Users/jak/src/daw-ae-p1-2-g2b-implementation`, created
+from the exact frozen product baseline `92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8` (tree
+`238ac970b5d61fe16055ede4c43a2978ddb11da7`) after confirming the branch name and path were unused.
+Both packet checkers were re-run at their pinned SHAs and both manifest SHA-256 digests verified
+before anything was edited.
+
+### The plan was prose, and prose was where the defects hid
+
+The first slice plan was a markdown table. An independent reviewer found **thirteen** blockers in
+it: two frozen records (`R-STABLE-DEVICE-TARGETS`, `D-PRODUCTION-FIXTURE`) landed by no slice at
+all, four ordering inversions against the manifests' own `dependencies` edges, seven tests assigned
+to a slice whose committed state could not make them pass, and a coverage claim asserted rather
+than derived.
+
+Every one of those is a question a program can answer. The plan is now a machine-readable step map
+(`docs/architecture/tasks/AE-P1.2-g2b-implementation-steps.json`) with a checker
+(`tools/architecture/ae_p1_2_g2b_impl_steps_check.py`) that verifies packet identity by SHA,
+record coverage as a bijection, every declared dependency edge, every textual edge's quote against
+the frozen statement, test coverage as a bijection, and byte-identical generated prose. Writing the
+checker immediately caught **four more** inversions the human-written revision still had.
+
+**The structural finding: the frozen contract is not decomposable into independently shippable
+slices.** `R-DISPATCH-TICKET`'s ticket tuple names the `sessionBlockTicket` that
+`R-TRANSACTIONAL-EVENT-BATCH` introduces, while that record declares `R-DISPATCH-TICKET` as its
+dependency; `R-PASS4-REPLACEMENT` asserts an offline outcome while `R-OFFLINE-PRIMER` declares
+`R-PASS4-REPLACEMENT`. No partition makes every step a state in which the whole contract is true.
+The plan is therefore **8 steps of one atomic change**, three of them preparatory (closing no
+record), with a completion gate instead of per-step shippability. The dispatch cluster is one step
+because the contract makes it one.
+
+### Step 1 landed at `5822cfbd`, pushed and verified on the remote by SHA
+
+Device ids are project-global, bounded to `[1, 0x7FFF]`, and never reissued. The ceiling is the
+narrowest lossless bound across the carriers that already exist — `kUiPatcherDeviceIdMask` is
+literally `0x7FFF`, so an id above it publishes intact and returns through a UI edit as a different
+device. `apps/stable_device_id.h` is the one definition; `apps/engine_device_id_watermark.h` is the
+live authority and the document field is its serialization, meeting at exactly two functions
+(`captureDocument` stamps, `applyDocument` adopts) with `adopt` taking the max — which is what makes
+"never reuses a deleted id" survive undo restoring an older document.
+
+Removed: the chain-local allocator, **and a second copy of it in `project_file.cpp` that no schema
+gate covered** — on a schema-6 load it assigned ids below the watermark (already spent) and
+laundered device id 0 into a legal-looking id *upstream of the validator that exists to refuse it*.
+
+### The diff review returned nine blockers; two were real damage
+
+- **Every add-device from the web UI was refused.** The sidecar spells "engine, you pick" as
+  `kChainDeviceIdAuto`; only the bare-0 spelling was honoured, so `0xFFFFFFFF` arrived as an
+  explicit id and was rejected. The diff's own `static_assert` asserted the very fact that broke the
+  caller, without checking the caller.
+- **Migrated hosted devices silently orphaned their plugin state.** `demo.uniproj` moves an
+  instrument 1→2 and its blob is on disk as `t1_d1.bin`; the restore looked only under the new id,
+  `continue`d without a word, and the next save would have orphaned it permanently — project opens,
+  chain intact, every plugin at factory defaults, nothing reported. `legacyArtifactKeys` had been
+  built for exactly this and given no consumer.
+
+Also: an explicit `--device-id` never raised the watermark, producing a file that saves cleanly and
+then refuses to open; `packSamplerAddr` refused device 0, which is the *documented* "track's first
+sampler" on that carrier; two Rust producers still truncated (`(id as u16) & MASK` turns
+`--device 32768` into device 0 **with the presence bit set**); and four comments still stated the
+superseded rule.
+
+### Two more the suite found after the review had finished
+
+- `next_device_id` as `Authored` made `undo_ratchet` report "AddDevice: UNDO did not restore the
+  document" — the comparer correctly seeing a field the engine correctly refuses to move. It is
+  `FieldKind::Session` now, whose rule is exactly "undo must never restore this". That kind's own
+  definition said "not part of the document at all", which a persisted watermark disproves, so the
+  definition moved with it.
+- **The new track-id uniqueness rule refused every multi-out project.** An aux child's `track_id` is
+  derived from the live track count and collides with a real track's the moment one is inserted —
+  `project_file.h` says outright that a child "reattaches by BUS INDEX, never by track id". A rule
+  was written against a fact the format explicitly denies. It now covers only tracks addressed by
+  their id, and *requires* an aux child to hold no devices rather than observing that it happens to.
+
+### Three linter rules superseded rather than left unable to fire
+
+`track-id-duplicate`, `device-id-duplicate` and `modlink-device-missing` can no longer fire: the
+loader refuses those documents before `daw_lint` sees them. The linter's own header says a rule that
+never fires "is worse than no rule: it reads as coverage", so the three were removed and
+`lint_check.sh` now asserts each document is **refused, naming the defect**. The report went from a
+lint finding on a project that opens to an error that stops it.
+
+### A pre-existing defect that blocked all measurement, fixed separately at `4c4a783d`
+
+Seven checks hardcoded `identity_plugin_artefacts/VST3/Identity.vst3` — a layout JUCE stopped
+emitting long ago, which `tools/webstack.sh` already records in those words. The **engine** had been
+fixed for it; the check scripts were the half that got missed. On a build directory configured both
+ways over its life both paths exist and everything passes; on a fresh checkout seven checks bail and
+read exactly like a regression in whatever you are changing. `tools/lib/identity_plugin.sh` hoists
+the resolution that one of eight sites already had right. A fresh worktree also needs
+`build/plugin_cache.json`, which nothing generates — `juce_scan` produces it, and that gap is
+recorded here rather than fixed.
+
+### Verified
+
+`ctest` 234 tests: **233 passed, 1 skipped by design (`audio_stability`), 1 failed —
+`repository_integrity`, which fails identically on the frozen product worktree with the same 2
+violations from `docs/architecture/evidence/AE-P1.3-nonoverlap-542d8838.json`.** Reproduced there
+rather than assumed. Rust: 258 tests pass. Build clean at zero `error:` occurrences.
+`version_parity_check` passes with four guarded mirrors, all verified as committed at HEAD — the
+new `PROJECT_SCHEMA_VERSION` exists so a Rust test can assert the current schema without typing it,
+and `SHM_LAYOUT.md`'s restatement of both protocol versions is now a checked mirror rather than a
+third copy, with both negative controls proven to fire. Two negative controls on the new tests
+(`adopt` assigning instead of max; migration renumbering sequentially instead of keeping) were each
+shown to fail the tests that name those properties.
+
+`kControlVersion` 14→15 and `kShmVersion` 41→42 advanced early on purpose: this step changes what
+existing SHM bytes MEAN without moving one, and a marker only correct at the end of a multi-step
+change is not a marker. `SHM_LAYOUT.md` states plainly which half has landed and which has not.
+
+### Open
+
+Steps 2-8 remain. `ui-web` still carries comments justifying its design with "device ids are
+per-track"; the code stays correct (its `(track, device)` param key is now merely redundant) and it
+belongs to the frontend agent, so it is flagged rather than edited across that boundary.
