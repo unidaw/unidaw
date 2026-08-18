@@ -6621,3 +6621,82 @@ the affected targets were rebuilt and re-verified rather than assumed.
 Steps 4-8 remain. Step 4 is the session ExecutionSnapshot — 8 records and 12 tests, the largest
 single step, and the one that makes everything steps 1-3 built into the sole execution authority.
 The master-FX artifact gap recorded under step 2 belongs there.
+
+## AE-P1.2 G2-B implementation step 4: in progress — the session ExecutionSnapshot (2026-08-18)
+
+**Not complete.** Recorded now rather than at the end because the step is large — 8 records, 12
+tests, and `P-EXECUTION-AUTHORITY-CONSUMERS` inventories ~380 sites — and because two review rounds
+have already produced findings worth keeping whether or not the step lands as planned.
+
+The step map settles how to work it: *"the steps below are a BUILD ORDER for one atomic change, and
+every intermediate commit is a development state of that change."* So this goes in reviewed
+increments, and the records are claimed only at the end.
+
+### Built so far
+
+- `apps/execution_snapshot.{h,cpp}` — the `ExecutionSnapshot` type R-HOST-PLAN-AUTHORITY requires,
+  and `validateExecutionSnapshot`.
+- `apps/engine_snapshot_store.h` — the publication transaction: compile, validate, publish, or
+  change nothing.
+- `apps/published_track_snapshot.h` — see below.
+- `tools/architecture/snapshot_publisher_inventory.py` + its evidence artifact.
+
+**Nothing is wired into the engine yet.** The rewire surface is enumerated rather than guessed: 43
+production sites across 9 files — `chainDevices` 23, `TrackStateSnapshot.routing` 10,
+`routesToMaster` 8.
+
+### The lesson of this step so far: a scan cannot enumerate what a type can forbid
+
+`P-SNAPSHOT-PUBLISHERS` states the population exactly — *"Exactly twenty-four production
+TrackStateSnapshot publications exist: three prepublication assignments and twenty-one atomic
+stores."* Verifying it began with a script that scanned C++ for the shapes a publication takes.
+
+Two independent reviews defeated that script **nineteen times**:
+
+- The first found **eight**, including a laundering attack: delete a real store, add a textually
+  identical one inside a `/* */` block comment, and both the count and the regenerated evidence
+  artifact accepted it.
+- The repair replaced the `//`-stripping regex with a lexer, answered address-taking by walking the
+  receiver expression, scanned the working tree and the whole repo, and made an escaping address a
+  refusal. The second review then found **eleven more** — `(*rt).member = x`, `.swap()`, a helper
+  taking the slot by reference, a function *returning* the member, `auto&&`, a typedef bind, raw
+  string literals and digit separators that broke the lexer, a substring path test for "is this a
+  test file" — **plus a false positive that refused `if (rt != nullptr && rt->trackSnapshot)`**, an
+  ordinary null guard. A check that fails on ordinary code gets deleted by whoever hits it first.
+
+Every repair widened a pattern and the next shape was outside the new one. **"Every way to write a
+`std::shared_ptr` member" is not a regular language**, so that loop does not terminate.
+
+`apps/published_track_snapshot.h` ends it: the slot is private, there is no assignment operator, no
+swap, and no accessor that yields its address. All eleven shapes are now **compile errors** —
+verified one at a time. The two methods are the record's own two categories (`publish` for the
+twenty-one atomic stores, `assignBeforePublication` for the three prepublication assignments), so
+the split the record states stays countable. The script's job shrank to counting two named calls,
+and still reports 24 = 3 + 21.
+
+This is the same conclusion this effort reached about the two loose-integer plugin-path helpers in
+step 2, arrived at the hard way a second time: **remove the surface rather than watch it.**
+
+### What the reviews found in the product code
+
+The second review's verdict on the first's twelve findings was **2 fixed, 4 moved, 6 partial** —
+worth recording plainly. Among the substantive ones: `nextDeviceId` gained a *range* check and still
+has no *monotonicity* check, so device ids can be re-issued across revisions; `ExecutionSnapshot::
+patcherGraph` was added to the type in the same commit whose comment says *"a declared field with no
+rule is not 'not yet used' — it is a hole with a name"*, and has no rule; the external-input
+registration set is collected from the very declarations it validates, which disarms a rule the
+routing compiler enforces correctly; and twelve one-line mutations still leave both test binaries
+green, including deleting the writer lock from the publication transaction. Those are open.
+
+### Process errors, recorded because they cost measurement
+
+Engine checks were run **standalone while a full ctest run was in progress**. Both launch engines and
+plugin hosts, and concurrent engines contend for host sockets — `Failed to create server socket` is
+exactly that symptom. Two suite failures from that run cannot be attributed and were discarded rather
+than reported either way. The existing note about this was filed under *sweeps*; the hazard is
+concurrent engines, whatever launches them.
+
+Separately: a control sweep's restore left a stale object file, so the tests reported a failure that
+was not in the source. And a first attempt at reproducing eight bypasses produced eight "failures"
+that were **all** the sandbox's unresolved packet path — a control that fails for a reason unrelated
+to what it tests is not a control.
