@@ -6616,9 +6616,30 @@ Two process errors, recorded because they cost real time: a suite was rebuilt un
 171/241 and had to be discarded, and two comment-only edits landed during the replacement run, so
 the affected targets were rebuilt and re-verified rather than assumed.
 
+### Committed
+
+The first increment is `04861924` on `ae/p1-2-g2b-implementation`: the type, the builder, the
+publication transaction, `PublishedTrackSnapshot`, and the publisher inventory with its evidence
+artifact. It claims **no record** — nothing is wired into the engine yet.
+
+`ctest` 244 tests: **243 passed, 1 failed — `repository_integrity`**, pre-existing and unrelated,
+reproduced on the frozen product worktree. Every unit binary passes; the step map, the publisher
+inventory and the path-construction check all pass; and **42 of 42 validator guards fail their tests
+when disabled** (36 by assertion, 5 by failing to compile, 1 after being given the test it lacked).
+
+Three suite runs were discarded along the way and the reasons are recorded above — two of them mine.
+
+### Still ahead in step 4, and larger than what is built
+
+The rewire: 43 production sites across 9 files that remove `TrackStateSnapshot.chainDevices`,
+`TrackStateSnapshot.routing` and `routesToMaster` as execution authorities. The N-1 delivery change
+that lets the serial group go — designed rather than left to be discovered, including the off-by-one
+that would be silent and would sound like latency rather than like a bug. And the 12 tests the step
+map binds to this step. None of the 8 records can be claimed until those land.
+
 ### Open
 
-Steps 4-8 remain. Step 4 is the session ExecutionSnapshot — 8 records and 12 tests, the largest
+Steps 5-8 remain. Step 4 is the session ExecutionSnapshot — 8 records and 12 tests, the largest
 single step, and the one that makes everything steps 1-3 built into the sole execution authority.
 The master-FX artifact gap recorded under step 2 belongs there.
 
@@ -6755,6 +6776,42 @@ were each worth having:
 That last one is the finding about the harness rather than the code, and it is the more useful one:
 **a sweep that rebuilds quickly can report a false survivor, so every survivor must be re-checked
 with the object forced out** before it is believed or acted on.
+
+### Three audit questions, three different answers
+
+With the tree frozen waiting on a suite, the same code was audited three ways. **None of the three
+would have found the other two's answers**, which is the finding worth keeping:
+
+| question | what only it could see |
+|---|---|
+| which guards can be disabled with the tests still green? *(42-guard mutation sweep)* | four survivors — but the sweep had been run BEFORE the builder existed, so it was blind to what the builder made dead afterwards |
+| which fields does the validator only COPY, never test? | the host-segments cross-check, dead since the builder began deriving the member the validator re-derives |
+| which error codes are declared-but-unraised, or raised-but-unnamed by a test? | two DEAD ENUMERATORS — names left behind when their checks were deleted |
+
+A single audit predicate is a proxy for "is this sound". Rotating the QUESTION is what finds the
+rest; running the same question harder does not. This ledger already records that a check predicate
+is a proxy — the new part is that the same applies to the predicates used to audit the checks.
+
+The third audit got its own first run wrong, in the way this effort keeps finding: it counted the
+`snapshotErrorCodeToString` switch as "raised", so every code looked live and it reported three
+false results. That switch names every enumerator by construction — counting mentions rather than
+uses. Caught because the answer looked too convenient, and the detector was fixed before its output
+was believed.
+
+### What came out, and why removing checks is the measure
+
+Deleted this round: the host-segments cross-check, and the enumerators
+`HostSegmentsDisagreeWithPlan`, `DeviceOwnerMapDisagrees` and `RoutingGraphDisagreesWithPlans`. All
+three named a derived structure disagreeing with the plans it came from; all three became unraisable
+when those structures became private to the builder.
+
+**A name for a fault that cannot occur is the mirror image of a field with no rule**, and just as
+misleading — it reads as coverage of a case nothing can reach.
+
+The one guard that survived the re-run was NOT dead: the builder's own `UINT64_MAX` refusal is
+unreachable from the store, whose ceiling sits a revision lower, so no test had ever reached it.
+`buildExecutionSnapshot` is public, and a check guarding a public contract needs a test of that
+contract rather than of its one current caller. Tested directly; it now fails when disabled.
 
 ### Process errors, recorded because they cost measurement
 
