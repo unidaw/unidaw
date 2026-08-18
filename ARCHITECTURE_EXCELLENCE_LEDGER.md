@@ -6234,3 +6234,20 @@ No product source was edited, built, or run while the implementation gate was cl
 same-SHA dual PASS now satisfies item 18 and the dependency recorded by item 15, so product
 implementation is authorized but not yet started. Any change to the frozen packet requires a named
 successor and a new dual review.
+
+## Handoff after item-18 authorization (2026-08-18)
+
+This is a stopping-point record, not a new ticket ruling. `/tmp/dawhandover.md` was replaced with a
+cold-start handoff for the next agent. It records the exact architecture, product, item-15, and
+item-18 commit/tree/manifest identities; the same-SHA semantic and evidence PASS results; the
+schema-v9 artifact-provenance closure; the packet checker command and counts; the durable lead bus
+notification; and the user-owned untracked preset that must remain untouched.
+
+No dedicated combined item-15/item-18 product implementation branch or worktree has been created,
+and no product source has changed for that implementation. Older unrelated implementation
+worktrees are not evidence that this ticket started. The next authorized action is to create a
+dedicated product implementation worktree from exact clean baseline
+`92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8`, then implement the frozen item-15/item-18 contracts
+in bounded, reviewed slices. The packet worktrees remain frozen at item 15 `8ee5b3cd` and item 18
+`34f0d7b3`; any packet change requires a named successor and fresh dual review. Fleet drain or
+restart state was not inferred or changed during this handoff.
