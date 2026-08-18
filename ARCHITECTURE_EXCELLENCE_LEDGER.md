@@ -6371,3 +6371,134 @@ change is not a marker. `SHM_LAYOUT.md` states plainly which half has landed and
 Steps 2-8 remain. `ui-web` still carries comments justifying its design with "device ids are
 per-track"; the code stays correct (its `(track, device)` param key is now merely redundant) and it
 belongs to the frontend agent, so it is flagged rather than edited across that boundary.
+
+## AE-P1.2 G2-B implementation step 2: a document names its artifacts (2026-08-18)
+
+Step 2 of the machine-checked step map is complete, in two commits on
+`ae/p1-2-g2b-implementation`: `89dfadd7` (the generation, the inventory, the commit order) and
+`ca37ba5c` (the load half, the provenance rules, two rounds of independent review).
+
+Step 2 lands **no** frozen record and has **no** test bound to it — the records it serves complete
+at step 4. That is the step map's claim, re-verified by its checker, and it is why nothing below is
+described as closing anything.
+
+### What the step was for
+
+Plugin artifacts were located by **guessing a filename**. `t<track>_d<device>.bin` in the project's
+state directory, and whatever sat at that path was loaded, retained and packaged. A schema 1-5
+migration renumbers a device whose track shared an id with another; the id it lands on may name a
+file left by a *different* device from an older save; the load finds a canonical-looking file and
+the plugin comes up with someone else's patch — with every structural check passing, because a file
+was found where a file was expected.
+
+A schema-6 document now carries `artifact_generation` (SHA-256 of the sorted entries) and
+`artifact_entries` `{trackId, globalDeviceId, kind, leafName, size, sha256}`, and the files live at
+`<state dir>/generations/<generation>/<leaf>`. The load resolves only what the inventory lists and
+verifies every byte. The commit order was **inverted**: it used to write `project.json` first and
+the blobs after, best-effort, so an interruption between them left a document referring to state
+that was never written — indistinguishable from a project that genuinely had none.
+
+### What the two reviews cost and bought
+
+Twelve findings each, from two independent sub-agents. Four were not cosmetic, and three of those
+were in the *first* round's fixes rather than in the original code.
+
+- **The verification ran after publication.** `applyDocument` is not a dry run: it rebuilds every
+  chain, relaunches hosts and publishes six snapshots. Failing after it left a half-replaced
+  session — new tracks live, old loop range, **old undo history**, so one Ctrl-Z applied the
+  previous project over the new one's tracks. The comment beside the failure quoted
+  `present_file_rules`' "before document or ExecutionSnapshot publication" while violating it.
+- **`multiout_persist` failed the moment that was fixed**, which is the finding confirming itself.
+  Its fixture built an edited document without copying the generation beside it; the check had been
+  passing *because* the load published before it refused.
+- **A returned failure was dropped.** `retainManifestSide` returned `bool`; the caller ignored it.
+  An unverifiable manifest loaded silently **and** left the previous project's bytes armed for
+  republication under the same device id.
+- **A fix that moved the defect.** The legacy import gained the rewrite `legacy_import` requires
+  without the comparison `present_file_rules` requires *first*, so a manifest naming a different
+  device was restamped to agree, retained, and republished with a matching digest. That converts a
+  detectable mis-addressing into an **undetectable** one. The tell the reviewer named: three
+  comments quoted the clause with an ellipsis cutting exactly the parenthetical `(LegacyArtifactKey
+  for schema 1-5, indexed global key for schema 6)` — the half that says the legacy side must
+  compare too. All three quotes are whole now.
+
+### Removing a surface rather than watching it
+
+`legacy_precedence` is a rule about which paths the code **builds**, which no unit test can see: a
+probe at the device's current id compiles, links, passes every structural check, and loads a
+different device's patch. It was guarded by a grep, and a reviewer defeated that grep three ways —
+through `artifactLeafName`, which the guarded helpers *forwarded to* and which produces
+byte-identical output; through a one-line wrapper renaming a parameter; and by satisfying its
+population counter with two comment lines, so it reported "2 call sites examined" with both real
+ones deleted.
+
+`pluginStateFileName`/`pluginParamsFileName` took two loose integers and therefore accepted a
+device's **current** id. They are deleted. The only spelling of a flat legacy path is
+`legacyArtifactLeafName(key, kind)`, which cannot be called without a `LegacyArtifactKey` — a value
+only the migration produces. The type is the guarantee; the rewritten check is a guard, and says so.
+
+### The controls, and the two that were blind
+
+Both new checks had their negative controls run rather than asserted.
+
+- `artifact_legacy_key` loads a shipped legacy project (PASS), corrupts **only** the manifest's
+  embedded pair (must FAIL, naming what disagreed), restores it (must PASS). Reverting the
+  comparison makes it red; restoring makes it green.
+- `artifact_path_construction` fails all three attacks that defeated its predecessor, strips
+  comments before matching, and fails when its examined population is empty.
+
+Two of ours were blind when first written, and both were caught by running them rather than by
+reading them:
+
+- `theManifestKeyIsReadableAndRewritable` rewrote 7,19 → 2,300. Swapping the two `text.replace`
+  calls — the exact stale-offset bug the comment beside them warned about — changed nothing,
+  because 7 → 2 is **width-preserving**. It rewrites to 250,300 now, and the comment records that
+  the widths are chosen rather than incidental.
+- `artifact_path_construction`'s rule 1 searched for `artifactLeafName(`, which does not occur
+  inside `legacyArtifactLeafName(` — capital A. Its population was zero and it passed by examining
+  nothing: the same vacuity its population control exists to catch, arriving through the selector
+  instead of the code.
+
+`staleCanonicalFileIsUnreachable` was deleted. It wrote a decoy file and then called a deserializer
+that does no filesystem I/O, so deleting the decoy left every assertion passing. Its file header and
+its CMake comment both claimed coverage that did not exist; both now state what is and is not
+covered there, and name where the real coverage is (`T-ARTIFACT-PROVENANCE`, step 4).
+
+### A property of the plugins, exposed rather than caused
+
+Pushing a VST3 state chunk into a plugin and re-capturing it does **not** round-trip byte-exactly.
+Measured on `maximal`: same size, ~200 bytes different, all in parameter values, while the parameter
+manifests are byte-identical. It was invisible until the document began carrying digests. The
+consequence is that every save produces a new generation even when nothing was authored, which
+content addressing tolerates. `save_roundtrip` and `document_value` blank `artifact_generation`,
+`sha256` and `size` and deliberately keep `track_id`, `device_id`, `kind` and `leaf` watched, so
+both still fail if an artifact appears, vanishes, or changes owner.
+
+### Verified
+
+`ctest` 239 tests: **238 passed, 1 failed — `repository_integrity`**, which fails identically on the
+frozen product worktree with the same 2 violations from
+`docs/architecture/evidence/AE-P1.3-nonoverlap-542d8838.json:67`. Build clean at zero `error:`
+occurrences, read from the log before committing. The step-map checker passes: 8 steps, 45 frozen
+records (33 landed, 12 excused), 45 frozen tests all bound, 7 textual edges quoted and backward,
+3 recorded deviations.
+
+Every shipped parameter manifest was checked against the new parser before landing it — including
+`_harmdiag2`, whose three devices all carry id 1 and are exactly the track-scoped collision the
+migration renumbers. All parse.
+
+### Open, and one thing an owner should rule on
+
+Steps 3-8 remain. Step 3 (routing normalization, the 20-row matrix) is designed and its surface
+surveyed; steps 3 and 4 have no records of their own either, the routing records completing at
+step 4.
+
+**Master FX plugin state is never captured or restored.** The master's *chain* is saved and loaded;
+its plugins' state blobs are not, because the master runtime is deliberately kept out of the track
+table and the artifact walk iterates that table. This **predates** this work and is not widened by
+it — `entry_identity` permits zero entries per device, so a master FX with no artifacts is a legal
+row of the presence matrix. It is now *visible* (`artifact.track_has_no_runtime` fires on every save
+of a project with master FX) rather than silent. Whether closing it belongs to item 18 at all is an
+owner call: `R-HOST-PLAN-AUTHORITY` covers "every track/master plan" and lands at step 4, so the
+natural home is there rather than here, and it was left rather than folded into a step that does not
+claim it.
