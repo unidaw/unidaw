@@ -6902,3 +6902,84 @@ rule is not a style preference; it is the difference between evidence and none.*
   arrival order. Removing the group now would be **claiming half a change**. What did change is the
   comment above it, which no longer justifies itself with the half that is gone — a stale
   justification for a live mechanism is how the next reader concludes the mechanism is unnecessary.
+
+### The item-18 entry above was written before review, and review took it apart
+
+Two independent reviewers read the change and the two documents describing it. Between them the work
+did not survive, and the corrections matter more than the fix. **The section above is left standing
+rather than edited**, because a ledger that quietly repairs its own claims teaches nothing; what
+follows is what was wrong with it.
+
+**A measurement was stated that had not been taken.** The commit message ended "244 ctest tests
+pass." It was drafted while the suite was still running, against a tree with 245 registered tests,
+and the run it was meant to describe finished 243 passed / 2 failed / 1 skipped. A reviewer also
+traced the digits: the number came from a line that reports a **failure** count. Of everything here
+this is the plainest — a sentence in the measured voice, about a measurement not yet made, in a
+commit whose whole subject is not overstating evidence.
+
+**The repository refuted a claim without help.** The ledger said the reason for not registering the
+flaky check sat in CMakeLists "at the point a reader would otherwise add it." One of the two suite
+failures was `check_registry`, which exists precisely to forbid that: its own comment reads *"The
+next check that cannot run needs a reason here rather than a quiet absence from CMakeLists, which is
+what forty-three checks had before this ratchet existed."* The mechanism — `DECLARED_UNREGISTERED` —
+was already built, already had two entries in exactly the right register, and I wrote a comment
+instead and then claimed it was well placed. **The gate for the mistake was already failing while the
+claim was being written.**
+
+**The noise sample was invalid by this ledger's own rule.** "Eight consecutive runs disagreed three
+times, 3 to 4 blocks" is *not reconcilable* with the artifacts it came from: seven kept failure
+directories, six inside a 104-second window, spread **3 to 5** blocks — and at least two taken while
+a ctest run was in flight. That last is the exact condition written down two sections above as
+invalidating. I measured noise under the conditions I had already ruled unmeasurable, then used the
+result to discard a check.
+
+**And the fix was unratcheted.** A reviewer measured both directions: reverting the *header* failed
+the test, reverting the *call sites* did not — the test binary was one translation unit that could
+not see the producer. It would have shipped green through its own removal. The test also carried two
+assertions that cannot fail (`0xFFFFFFFF + 1 == 0` asserts the language, not the code), and the
+"tests the full uint32 range" claim described a loop bound of 4096.
+
+### What the repair changed, and why it is a different shape
+
+The answer was not a better test. Two exposed index functions and a two-element array is the
+**validate-by-convention** shape this whole effort has been removing: the rule sits beside its call
+sites and nothing but discipline keeps them aligned. It also admitted a defect no test could catch —
+*swap* the two functions and delivery breaks completely.
+
+`InboundAudio` (`apps/inbound_audio.h`) has one private slot function and two named roles that differ
+only in **which block they name**: a source names the block its audio is *for*, a destination names
+its own. There is no index at a call site to get wrong and no pair to swap. Because the object is the
+rule, the test drives the object — and three separate reverts inside it (single slot, same-block
+delivery, no stamp) each fail it, with the assertion that fires naming the defect.
+
+**The stamp is the part reasoning would not have produced.** Parity keeps a writer and a reader off
+one slot within a block; it says nothing about whether what is *in* a slot belongs to the block now
+reading it. The read sits below four early returns while the write has no matching guard, so a
+destination really does skip blocks — and with parity alone the stale slot is never cleared, so a
+later block sums audio from two blocks **two apart**. When a destination's host dies the sum grows
+without bound until it returns. A reviewer found that by simulating the call-site logic rather than
+reading it. Addressing each delivery to the block it is for makes stale data unreadable instead of
+quietly audible.
+
+### Three gaps, where the earlier entry disclosed two
+
+- **Sidechain is not covered, and is not even serialised.** Already disclosed as "not N−1"; what was
+  missed is that the serial partition registers `audioOut` and `midiOut` endpoints only, so both ends
+  of a sidechain edge can land in the parallel group. That is the very ordering the record forbids.
+- **MIDI is order-independent, but not because of this.** Both documents quote R-ROUTING-AUTHORITY's
+  "MIDI, audio, and sidechain" and a reader would credit this change with the MIDI half. It was
+  already handled by a different, pre-existing mechanism — the source stamps for the next block and
+  the destination defers anything past its end. **Quoting a rule you satisfy in part reads as
+  satisfying it in whole.**
+- **A track slot being reused inherited deliveries.** `resetTrackContent` clears a dozen fields under
+  a comment about exactly this class of bug, and did not clear these. It does now.
+
+### The shape worth keeping
+
+**A retracted claim does not live in one place.** The retraction went into the commit message and the
+ledger while an identical sentence — the check's numbers, offered as proof — sat in the serial-group
+comment in the engine, in the script's own header thirty lines below a warning not to trust it, and
+in the script's PASS line. The code comment is where the next reader would actually have met it.
+Retracting a claim means finding every sentence that states it, which is a rule already in this
+ledger under a different name; what is new is that **the copy in the source outlives the copy in the
+document, and is the one that gets believed.**
