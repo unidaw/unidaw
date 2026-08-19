@@ -7542,3 +7542,43 @@ because the two look identical in a diff — **one changes a name to match the t
 name to escape a rule**, and only the first survives someone asking what the name means.
 
 Five owed, from thirteen.
+
+### An entry in my own owed list was written from the match, not from the code
+
+Reaching `engine_track_setup.cpp`, the last of the "missing the Direct branch" group, it turned out
+**not to be a chain walk at all.** It is a bit-scan finding the lowest set bit of `auxOutMask`, and
+those bits *are* host slots because `rebuildHostForChain` sets them by host index — so it agrees with
+the host by construction and always did.
+
+My owed entry for it read *"walks the chain to seed host state at setup"*. I wrote that from the
+grep match without opening the file. **This ledger records, three sections earlier, that a hit matched
+for the wrong reason must be READ before it is dismissed — and I then wrote a description of a site I
+had not read into the very list that lesson produced.** The entry now says what it is and why it is
+listed, which is that the name-and-increment heuristic cannot tell a bit-scan from a device walk.
+
+The cost was small only because it erred toward listing work that did not exist. The same habit
+pointing the other way is how a real site gets described as harmless.
+
+### Three more converted, and the compiler kept score
+
+`engine_rt_helpers`, `engine_device_commands` (twice) and `engine_request_commands` all had the same
+shape — a `resolveHostIndexForDevice` lambda, or its inline equivalent, walking the chain and skipping
+what does not resolve. That is *nearly* the host's rule: it omits the Direct-with-a-real-path case, so
+a chain whose first plugin loads by path off disk numbered every later device one too low and aimed a
+modulation link, an editor, a parameter write or a read-back at the wrong plugin.
+
+`engine_request_commands` carried the intent explicitly — *"matching the host's compacted plugin
+vector … otherwise the read-back reports a shifted / wrong plugin's params"* — and implemented it with
+the rule that produces exactly the shift it warns about. **Knowing the failure mode is not the same as
+having the rule that avoids it.**
+
+**`-Werror=unused-variable` located every dead dependency for me**, one per rebuild, three times over.
+The loop that removes them is worth keeping as a technique: convert, build, let the compiler name the
+line, remove, repeat until clean. It proves the derivation is gone rather than bypassed, and it does
+not require guessing which binding became dead.
+
+Where the slot and the name are needed together, they now come from two owners — the slot from the
+recorded mapping under `controllerMutex`, the name from the chain under `trackMutex`, taken in that
+order and never nested. `lock_order_check` still reports two distinct nestings, none inverted.
+
+**Owed: 2, from 13 — and one of the two is the mis-described entry that was never work.**
