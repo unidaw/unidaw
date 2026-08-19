@@ -7517,3 +7517,28 @@ The liveness test `hostIndex > 0` — "at least one device resolved to a live ho
 `!hostSlotDevices.empty()`. Same question, asked of the record rather than of a re-derivation.
 
 Five sites converted, six owed.
+
+### The load path, and a rename that is not a rename
+
+`vstIds` collected every VST-*kind* device id in chain order with no resolvability test, and the load
+loop used that position as a host slot — so one missing plugin earlier in the chain pushed every later
+device's **saved state into the wrong plugin on load**. Silently: the session came back with the wrong
+settings, and nothing said so. That is the sixth site converted and the last of the ones that were
+wrong today.
+
+The `savedIds == liveIds` gate above it stays. It answers a different question — *does the document
+describe the chain we loaded* — and the defect was never in that comparison, only in the assumption
+that a position in it is a host slot.
+
+**The ratchet flagged the conversion, and the fix was to tell the truth rather than to widen the
+check.** The new loop copies the mapping into a local (deliberately: the body does IPC per device, and
+holding `controllerMutex` across that would serialise a load behind the host), and the local was named
+`slotDevices`. The predicate looks for `hostSlotDevices`, so it saw a host-index counter it could not
+attribute to the authority.
+
+Renaming the local to `hostSlotDevices` is not the same move as renaming to *avoid* a check: the local
+holds exactly that, so the name became more accurate rather than less. The distinction is worth stating
+because the two look identical in a diff — **one changes a name to match the thing, the other changes a
+name to escape a rule**, and only the first survives someone asking what the name means.
+
+Five owed, from thirteen.
