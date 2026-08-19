@@ -7300,3 +7300,73 @@ right now it is not.
 
 `docs/PROGRESS.md` was also at its staleness limit (12 commits behind, limit 12), so the next commit
 would have failed it regardless of this work.
+
+---
+
+## The suite depended on which speakers were plugged in
+
+Asked whether muting the Mac would weaken testing, the answer turned out to be no — and finding out
+why exposed a defect much larger than the question.
+
+**Muting is safe, and this was verified rather than reasoned.** `enableCapture` places the capture tap
+*inside the engine's audio callback*, recording the master output the engine itself produces. That is
+upstream of the system mixer, so volume and mute cannot reach it. The nine live-capture checks need
+the device's callback to RUN, not to be audible — the codebase already probes device liveness with
+`afplay -v 0`, volume zero, which is the same reasoning stated out loud.
+
+**A memory of mine was stale and had to be retracted mid-answer.** I said the offline render has no
+`--sample-rate` flag. It has one, it correctly wins over the device, and it is applied after the probe
+for exactly the stated reason. The mechanism was built; what was missing was its use.
+
+### 42 of 49
+
+The engine opens the default output device even when rendering to a file — `openAudioDevice` runs
+unconditionally — and takes its sample rate. `--sample-rate` overrides that. **Seven checks passed
+it. Forty-two did not**, so every one of them produced different bytes depending on what was last
+plugged in.
+
+The six pins that existed were added after `sampler_vintage` "passed for weeks on built-in speakers
+at 44100 and failed the first time a Bluetooth device made the default 48000 — with no commit
+involved, and while the engine was correct." **The fix went to the check that hurt, not to the class
+that could hurt.** That is the same shape as the thirteen host-index walks, two sections above, found
+the same day by a different route.
+
+All 42 now pin 44100 — the value the existing pins use and the rate this machine's device reports —
+so the change is a **verifiable no-op**: the suite staying green is what proves the *dependence* was
+removed rather than the behaviour changed. `render_rate_pinned_check` fails any check that renders
+without stating a rate, with no allowlist.
+
+**What was deliberately not done.** Making the offline render ignore the device entirely is the
+cleaner semantics, and the comment at the rate selection already claims that is how it works while
+the code does otherwise. But the engine's fallback is 48000 against a 44100 device, so that change
+shifts 42 checks today and needs each re-baselined. That is a decision about test values, not a
+cleanup, and it belongs to the owner.
+
+### A "flaky" Rust test that was nothing of the kind
+
+The same run failed `tracked_apis_reject_the_wrong_payload_family`, which then passed on re-run, 8/8
+in isolation and 4/4 under its full lib suite. The tempting word is flake. It is measurably not one.
+
+The panic is `create_new` failing at `control.rs:3032` — **the file already existed**. The fixture
+path was `pid + SystemTime::now().as_nanos()`, and cargo runs tests as parallel THREADS of one
+process, so the pid is shared and only the timestamp separated three concurrent callers. `as_nanos()`
+reports nanoseconds and does not resolve them: **200 rapid reads on this machine yield 11 to 14
+distinct values.** Two threads inside one microsecond build the same path.
+
+Testing the property directly rather than by reproduction — three threads, 1200 paths — the old
+scheme produced **946 duplicates** and the counter-based one zero. It only ever failed beside other
+work because thread bursts under contention are what put two calls in one tick, which is why `-j2`
+saw it and four serial runs did not.
+
+**"Unique" meant "unlikely to collide", and concurrency is what turns unlikely into routine.** The
+same defect class as a fixed temp filename — and I had fixed one of those in my own test an hour
+earlier, using the pid, which is sufficient there only because ctest gives each check its own process.
+
+### Two process errors of mine, recorded because one nearly cost hours
+
+The negative control I wrote for this was **unbounded**: twelve full cargo runs under three spawned
+busy-loops. It hit the ten-minute timeout, so the `kill` never ran and the sabotage was never
+restored. The load generators happened to die with the process group; the ledger already records
+eight of them surviving fourteen hours because `trap EXIT` does not run on SIGKILL, so that was luck
+and not design. **A control that cannot finish inside its budget is not a control**, and the property
+test that replaced it was both cheaper and more decisive than the reproduction would have been.
