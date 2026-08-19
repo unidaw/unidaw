@@ -7370,3 +7370,31 @@ restored. The load generators happened to die with the process group; the ledger
 eight of them surviving fourteen hours because `trap EXIT` does not run on SIGKILL, so that was luck
 and not design. **A control that cannot finish inside its budget is not a control**, and the property
 test that replaced it was both cheaper and more decisive than the reproduction would have been.
+
+### The carrier now records which device each slot is
+
+`TrackHostSegments` held `pluginPaths` and `pluginNames` in host-slot order and **not which device
+each slot was** — the same discard `rebuildHostForChain` makes, one layer up, and in a function that
+already had the id in hand. It now holds `std::vector<HostSlot>`, where a slot is a path, a name and
+the device that occupies it.
+
+**One vector of a struct, not a third parallel vector.** Paths and names were already two vectors
+obliged to stay the same length and order; adding the id as a third would have been the same defect
+with more surface. The flat lists a launch sends are now *derived* on demand, so they cannot fall out
+of step with the slots — which is exactly what two stored vectors could do.
+
+The type change worked as a find-all: the compiler named all six call sites, and there were no others
+because nothing in production reads the carrier yet.
+
+**The test asserts the mapping against a chain that contains an unresolved device**, which is what
+makes it an assertion rather than a restatement: carrier slot 1 is device 9, not device 8, and *every
+naive walk that has gone wrong in this codebase went wrong by answering 8*. Two controls confirm it —
+recording the chain position instead of the occupying device, and letting an unresolved device take a
+slot — each failing with the assertion that names the defect.
+
+`hostIndexOf` on the carrier returns nothing, **not a sentinel**, for a device that holds no slot. The
+render path already learned that returning an all-target sentinel there is "a SILENT WIDENING" that
+broadcasts one device's automation to every plugin on the track, and the same answer is right here.
+
+This is the input the thirteen walks were missing. Converting them is next, and the walk ratchet's
+owed list is the worklist that must empty.
