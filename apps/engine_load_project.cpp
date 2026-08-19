@@ -1044,15 +1044,33 @@ static void pushVerifiedBlobs(LoadProjectDeps& deps, const daw::ProjectDocument&
           .field("live_plugins", static_cast<uint64_t>(liveIds.size()));
       continue;
     }
-    for (size_t hostIndex = 0; hostIndex < savedIds.size(); ++hostIndex) {
-      const auto found = verified.find({savedIds[hostIndex], daw::ArtifactKind::StateBlob});
+    // THE HOST'S OWN SLOTS, not a position in a kind-filtered list.
+    //
+    // `vstIds` above collects every VST-KIND device id in chain order with no resolvability
+    // test, and this loop then used that position as a host slot. rebuildHostForChain omits
+    // any device whose plugin does not resolve, so one missing plugin earlier in the chain
+    // pushed every later device's SAVED STATE into the wrong plugin on load — silently, and
+    // the session simply came back with the wrong settings.
+    //
+    // Iterating hostSlotDevices instead gives the slot and the device together, and a device
+    // the host is not holding is absent from it rather than mis-numbered. The savedIds ==
+    // liveIds gate above still stands: it is a different question (does the document describe
+    // the chain we loaded), and this one is which slot each device answers to.
+    std::vector<uint32_t> hostSlotDevices;
+    {
+      std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+      hostSlotDevices = runtime->hostSlotDevices;
+    }
+    for (size_t hostIndex = 0; hostIndex < hostSlotDevices.size(); ++hostIndex) {
+      const uint32_t deviceId = hostSlotDevices[hostIndex];
+      const auto found = verified.find({deviceId, daw::ArtifactKind::StateBlob});
       if (found == verified.end()) {
         continue;
       }
       if (found->second.source == daw::ArtifactSource::LegacyOldKey) {
         DAW_EVENT("project.state_restored_from_legacy_key")
             .field("track", source.trackId)
-            .field("device", savedIds[hostIndex]);
+            .field("device", deviceId);
       }
       // THE HOST MUST BE READY. On the common path it is — setupTrackRuntime launches
       // synchronously and rebuildHostForChain keeps it up — but when the chain reconcile FAILS it
@@ -1069,7 +1087,7 @@ static void pushVerifiedBlobs(LoadProjectDeps& deps, const daw::ProjectDocument&
       }
       DAW_EVENT("project.state_restored")
           .field("track", source.trackId)
-          .field("device", savedIds[hostIndex])
+          .field("device", deviceId)
           .field("bytes", static_cast<uint64_t>(found->second.bytes.size()))
           .field("host_ready", hostRunning)
           .field("ok", ok);

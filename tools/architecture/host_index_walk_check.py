@@ -58,12 +58,6 @@ OWED = {
     "engine_produce_block.cpp": "resolvability without the Direct branch -- host segment start/length "
                                 "on the RT path.",
     "engine_track_setup.cpp": "walks the chain to seed host state at setup.",
-    "engine_load_project.cpp": "`vstIds` builds an ORDERED list of VST-kind device ids with no "
-                              "resolvability test, and the loop below indexes it as a host slot -- "
-                              "so restored plugin state lands on the wrong plugin whenever anything "
-                              "ahead of it does not resolve. Found because this check matched its "
-                              "for-loop induction variable, which is the wrong reason for a real "
-                              "site; see the heuristic note above.",
 }
 
 
