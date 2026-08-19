@@ -1,6 +1,7 @@
 #include "engine_produce_block.h"
 
 #include "apps/inbound_audio.h"
+#include "apps/host_slot_rule.h"
 
 // What the block body reaches for beyond the module header. This file arrived carrying
 // main.cpp's includes, which described where it used to live rather than what it uses.
@@ -651,17 +652,23 @@ void produceBlock(ProducerBlockDeps& deps,
         segments.reserve(trackState.chainDevices.size());
         std::vector<SegmentInfo::AudioNodeInfo> pendingAudioNodes;
         pendingAudioNodes.reserve(trackState.chainDevices.size());
-        uint16_t hostIndex = 0;
         bool inSegment = false;
         uint16_t segmentStart = 0;
         uint16_t segmentLength = 0;
         for (const auto& device : trackState.chainDevices) {
-          const bool isVst = device.kind == daw::DeviceKind::VstInstrument ||
-              device.kind == daw::DeviceKind::VstEffect;
-          if (isVst) {
-            if (!resolveDevicePluginPath(*runtime, device.hostSlotIndex)) {
-              continue;
-            }
+          // IS THIS DEVICE IN THE HOST, AND WHERE — the recorded answer.
+          //
+          // This tested kind and then re-resolved the plugin path, which is nearly the rule
+          // rebuildHostForChain applied and not it: the Direct-with-a-real-path case is missing, so a
+          // chain whose first plugin loads by path off disk gave that device no slot here and every
+          // segment below started one plugin too low.
+          //
+          // NO NEW LOCK, and that is not luck. runtime->controllerMutex is already held across this whole
+          // track — taken at the top of the block, BLOCKING offline and try_to_lock in realtime so the
+          // producer is never stalled by the command thread — and it is the lock guarding hostSlotDevices.
+          // Reading it here costs nothing and takes a filesystem call OFF the per-block path.
+          const std::optional<uint32_t> slot = daw::recordedHostIndexOf(*runtime, device.id);
+          if (slot) {
             if (!inSegment) {
               if (!segments.empty() && !pendingAudioNodes.empty()) {
                 segments.back().audioNodeIds.insert(
@@ -671,11 +678,10 @@ void produceBlock(ProducerBlockDeps& deps,
                 pendingAudioNodes.clear();
               }
               inSegment = true;
-              segmentStart = hostIndex;
+              segmentStart = static_cast<uint16_t>(*slot);
               segmentLength = 0;
             }
             segmentLength++;
-            hostIndex++;
           } else {
             if (inSegment) {
               SegmentInfo info;

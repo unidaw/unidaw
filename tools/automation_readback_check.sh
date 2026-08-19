@@ -149,13 +149,33 @@ wait_for_boot "$TMP/eng.log" "$ENG" 80
 # wait_for_boot returning means the project LOADED. It does not mean the automation region has
 # been PUBLISHED, and `get automation` reads the region — the same proxy-wait mistake that made
 # lane_quantize_check flake one run in three. Wait on the condition you are about to assert on.
+#
+# AND THE CONDITION IS THE ONE ASSERTED, not a count of lanes. This waited for ">= 2 lanes" and then
+# asserted on 'cutoff' having 3 points — so two OTHER lanes publishing first satisfied the poll while
+# 'cutoff' was still absent, and the check reported it MISSING. That is the same proxy-wait the
+# paragraph above names, committed three lines below naming it: a lane count is a proxy for "the lane
+# I am about to read is there".
+#
+# Observed once in thirteen full-suite runs under ctest -j2 and never standalone, which is what a
+# publish race looks like from outside and is exactly why it is worth fixing rather than re-running.
 lanes_ready() {
   cli get automation 2>/dev/null | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
 except Exception:
     raise SystemExit(1)
-raise SystemExit(0 if len(d.get("lanes", [])) >= 2 else 1)'
+lanes = d.get("lanes", [])
+# THE FIELD NAMES ARE lane_field'"'"'s, read from it rather than guessed. The first version of this
+# predicate used "track"/"param_id" and a points LIST; the publisher emits "track_id"/"param" and a
+# points COUNT, so it could never have returned 0 — it would have polled the full 30s, fallen through
+# the `|| true`, and left the check passing by luck with half a minute added to every run. A poll
+# that cannot succeed is indistinguishable from one that always succeeds, from the outside.
+def points(track, param):
+    for lane in lanes:
+        if lane.get("track_id") == track and lane.get("param") == param:
+            return lane.get("points", -1)
+    return -1
+raise SystemExit(0 if points(0, "cutoff") == 3 else 1)'
 }
 # Bounded: on timeout the assertions below still run and still fail with their own message, which
 # is the point — the poll removes the race, it does not stand in for the check.

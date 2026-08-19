@@ -52,8 +52,6 @@ COUNTER = re.compile(r"\b(host(?:Index|Idx|Slot)\w*)\s*\+\+|\+\+\s*\b(host(?:Ind
 # and fails if a file named here no longer has one (so a fixed site cannot stay on the list and
 # quietly license a new walk in the same file).
 OWED = {
-    "engine_produce_block.cpp": "resolvability without the Direct branch -- host segment start/length "
-                                "on the RT path.",
     "engine_track_setup.cpp": "NOT A CHAIN WALK, and the first version of this entry said it was: \"walks the chain to seed host state at setup\", written from the match without reading the code. It is a bit-scan finding the lowest set bit of auxOutMask, and those bits ARE host slots because rebuildHostForChain set them by host index -- so it is consistent with the host by construction. It is listed because the name-and-increment heuristic cannot tell a bit-scan from a device walk, not because anything is owed. Describing a site from its match rather than its code is the exact failure this file exists to catch.",
 }
 
