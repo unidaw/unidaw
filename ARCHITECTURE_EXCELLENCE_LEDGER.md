@@ -7120,3 +7120,56 @@ which step 4 does not touch — sharing a name with the snapshot field it does.
 already records that for a *blocked* list; the same applies to a work estimate. Re-derive it when it
 is about to decide what gets built, and count with a predicate keyed to the construct — a zero from
 the wrong predicate is indistinguishable from a finished job.
+
+---
+
+## Step 4 resumed: the rule that was asked in two places
+
+Step 4 is "The session ExecutionSnapshot", and its frozen record P-EXECUTION-AUTHORITY-CONSUMERS says
+what the implementation must do: *"removes `chainDevices` and `routing` from `TrackStateSnapshot`,
+removes `routesToMaster` as a mixer authority, prevents execution targets from including authored
+chain APIs, and validates project-global stable device and artifact identities at every durable
+boundary."*
+
+**The first thing measuring the tree revealed is that step 4 (1/n) built a store nothing uses.**
+`EngineSnapshotStore` and `buildExecutionSnapshot` exist with tests and have **zero production
+callers** — so the fields cannot be removed yet, because nothing publishes the authority that would
+replace them. That is the honest state of the step, and it sets the build order: publish first, move
+consumers second, delete third.
+
+### Building the snapshot needed a rule that had two homes
+
+Converting a live chain into `DevicePlan`s requires knowing which devices hold a host slot and what
+compact index each one gets. That question was already implemented **twice**: as a lambda
+`occupiesSlot` in `engine_render_track.cpp` and as a loop in `engine_chain_host.cpp`. This effort's
+own record notes that step 2a caught those two disagreeing about bypass, and `SlotOccupancy`'s
+comment says why it mattered — *"they are the same question asked in two places … Recording the
+reason makes a disagreement visible in the plan instead of only in the audio."*
+
+Writing the conversion would have made a third copy. So the rule moved to `apps/host_slot_rule.h`
+first, and **both existing consumers now call it** rather than restating it.
+
+**It returns the resolution, not a bool.** The three consumers need different parts of one answer —
+the renderer wants the verdict, the host rebuild wants the path, the snapshot wants the verdict plus
+a compact index — and each used to compute the whole thing. Returning `{occupancy, path}` is what
+stops them drifting: *a consumer that recomputes the path is a consumer that can disagree about which
+device holds slot 3.*
+
+### The extraction is what made the defect testable
+
+Neither copy was reachable from a test. The renderer's needed a `TrackRuntime`; the host's needed a
+live plugin host. That is why a disagreement between them could only ever show up in the audio, and
+it is the real argument for extracting — not tidiness.
+
+Parameterising the path lookup as a callback makes the cases expressible, and the one that matters is
+the compact index: a chain of `[patcher, resolved, unresolved, resolved]` must give host slots 0 and
+1 to the two resolved devices. **A walk that counted every device would address the last plugin as
+slot 3, and the host would apply its parameters to a different plugin or to none.** Three negative
+controls — count every device, drop the Direct-with-a-real-path case, collapse `UnresolvedPlugin`
+into `NotHosted` — each fail the test, with the firing assertion naming the defect.
+
+`isHostedDeviceKind` came out of the same pass: the kind predicate was spelled out in both
+`forEachHostedDevice` and the new rule, and **a predicate spelled twice is a predicate that can be
+changed once.** Inserting it went wrong first — it landed between `template<...>` and its function,
+which is the third time this session an anchor was chosen for uniqueness rather than for meaning.
+The compiler caught this one; the two before it were caught by reading.
