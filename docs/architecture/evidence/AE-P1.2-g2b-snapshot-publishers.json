@@ -111,12 +111,12 @@
   "prepublication_assignments": [
     {
       "file": "apps/daw_engine_main.cpp",
-      "line": 419,
+      "line": 420,
       "text": "masterTrack->trackSnapshot.assignBeforePublication(buildTrackSnapshot(masterTrack->track));  // pre-publication"
     },
     {
       "file": "apps/daw_engine_main.cpp",
-      "line": 1105,
+      "line": 1092,
       "text": "runtime->trackSnapshot.assignBeforePublication(buildTrackSnapshot(runtime->track));"
     },
     {

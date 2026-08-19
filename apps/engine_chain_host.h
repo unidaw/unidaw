@@ -45,4 +45,12 @@ void emitChainSnapshot(ChainSnapshotDeps& deps, TrackRuntime& runtime);
 // Brings the track's plugin host into line with the chain it now has.
 void rebuildHostForChain(ChainHostDeps& deps, TrackRuntime& runtime);
 
+// EVERY HOSTED PLUGIN'S BYPASS, addressed by its host slot rather than its chain position. The
+// ChainHostDeps field above is a binding to this; the body lives beside rebuildHostForChain because
+// it must agree with that function's slot numbering, and host_slot_rule.h is what makes them agree.
+void applyHostBypassStates(
+    TrackRuntime& runtime,
+    const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>&
+        resolveDevicePluginPath);
+
 }  // namespace daw::engine

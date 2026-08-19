@@ -3,8 +3,8 @@
 // captured, so nested lambdas, shadowing and the brace scope all still mean what they
 // meant. Rewriting 1,300 lines to say `deps.x` would have touched every one of them.
 #include "apps/engine_render_track.h"
+#include "apps/host_slot_rule.h"
 
-#include <filesystem>
 #include <optional>
 #include "apps/engine_producer_helpers.h"
 #include "apps/engine_emit_notes.h"
@@ -385,17 +385,15 @@ bool renderTrack(RenderTrackDeps& deps,
             harmonySnapshot[i] = harmonyEvents[i];
           }
         }
-        // WHICH DEVICES HOLD A HOST SLOT — the same test rebuildHostForChain applies when it
-        // builds `pluginPaths`, INCLUDING its Direct-with-a-real-path case. A device that loads
-        // by path holds a slot exactly like one that resolved through the scan, and a walk that
-        // missed it would number every later device one too low.
+        // WHICH DEVICES HOLD A HOST SLOT — the rule itself is in apps/host_slot_rule.h, because
+        // rebuildHostForChain asks the same question when it builds `pluginPaths` and the ExecutionSnapshot
+        // asks it a third time. Step 2a caught the first two disagreeing about bypass; a third copy is how
+        // a rule with two copies becomes a rule with none. This adapts it to the bool forEachHostedDevice
+        // wants, and nothing about the rule is restated here.
         const auto occupiesSlot = [&](const daw::Device& device) {
-          if (device.hostSlotIndex == daw::kHostSlotIndexDirect &&
-              !device.vstRef.path.empty() &&
-              std::filesystem::exists(device.vstRef.path)) {
-            return true;
-          }
-          return static_cast<bool>(resolveDevicePluginPath(runtime, device.hostSlotIndex));
+          return daw::resolveHostSlot(device, [&](uint32_t slotIndex) {
+                   return resolveDevicePluginPath(runtime, slotIndex);
+                 }).occupies();
         };
         // THE ALL-TARGET FALLBACK IS A PREFERENCE OVER THAT WALK, not a different walk.
         //
@@ -430,17 +428,12 @@ bool renderTrack(RenderTrackDeps& deps,
         // aimed at one device whose plugin is bypassed or unresolvable would have broadcast every
         // one of its points to EVERY plugin on the track. The user asked for one device; the
         // correct answer when that device is not there is none, not all.
-        const auto compactIndexForDevice = [&](uint32_t stableDeviceId) -> std::optional<uint32_t> {
-          std::optional<uint32_t> found;
-          daw::forEachHostedDevice(trackState.chainDevices, occupiesSlot,
-                                   [&](uint32_t index, const daw::Device& device) {
-                                     if (device.id != stableDeviceId) {
-                                       return true;
-                                     }
-                                     found = index;
-                                     return false;
-                                   });
-          return found;
+        const auto compactIndexForDevice = [&](uint32_t stableDeviceId) {
+          return daw::hostIndexOf(trackState.chainDevices,
+                                  [&](uint32_t slotIndex) {
+                                    return resolveDevicePluginPath(runtime, slotIndex);
+                                  },
+                                  stableDeviceId);
         };
         // ONE PLACE A LANE'S TARGET BECOMES A NUMBER, so the two emit sites below cannot drift.
         // A disabled target returns nothing at all and the caller skips the lane.

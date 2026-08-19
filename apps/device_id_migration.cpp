@@ -1,4 +1,5 @@
 #include "apps/device_id_migration.h"
+#include "apps/device_chain.h"
 
 #include <set>
 #include <sstream>
@@ -30,12 +31,6 @@ std::string describe(uint32_t trackId, uint32_t deviceId) {
   return out.str();
 }
 
-// Only a HOSTED plugin has a state blob and a parameter manifest, so only a hosted device needs
-// its old artifact key remembered. A patcher or a sampler carries its whole document inside the
-// project file and has nothing beside it to find.
-bool isHostedDevice(const Device& device) {
-  return device.kind == DeviceKind::VstInstrument || device.kind == DeviceKind::VstEffect;
-}
 
 // THE LOWEST ID NOTHING HAS A CLAIM ON. `reserved` holds every valid old id in the document —
 // including ones belonging to devices this walk has not reached yet — so the search cannot take an
@@ -159,7 +154,7 @@ bool migrateTrackScopedDeviceIds(ProjectDocument& document,
       }
       assigned.insert(newId);
       migration.map[{track.trackId, oldId}] = newId;
-      if (isHostedDevice(device)) {
+      if (isHostedDeviceKind(device)) {
         migration.legacyArtifactKeys[newId] = LegacyArtifactKey{track.trackId, oldId};
       }
       device.id = newId;

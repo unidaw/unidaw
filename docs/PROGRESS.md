@@ -15,7 +15,7 @@ in a chat log so it survives the session that produced it.
 - main-cpp-lines: 2147
 - main-function-lines: 1940
 - ctest-entries: 232
-- main-function-ceiling: 1923
+- main-function-ceiling: 1909
 
 ## Why this file cannot quietly go stale
 

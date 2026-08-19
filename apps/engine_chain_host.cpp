@@ -1,11 +1,53 @@
 #include "engine_chain_host.h"
 
-// The one thing the two bodies reach for beyond the module header. This file arrived carrying
-// main.cpp's 96 includes, which described where it used to live rather than what it uses.
-#include <filesystem>
+#include "host_slot_rule.h"
+
+// This file arrived carrying main.cpp's 96 includes, which described where it used to live rather
+// than what it uses. It reached for <filesystem> for exactly one thing — deciding whether a device's
+// saved plugin path is really on disk — and that decision moved to host_slot_rule.h, so the include
+// went with it.
 
 
 namespace daw::engine {
+
+// EVERY HOSTED PLUGIN'S BYPASS, ADDRESSED BY ITS HOST SLOT.
+//
+// Lifted out of daw_engine_main.cpp, where it was a lambda: progress_check enforces a ceiling on
+// main()'s length and this pushed it over, which is the check working rather than an obstacle. It
+// belongs here anyway — ChainHostDeps already declares it, and rebuildHostForChain above is the
+// function whose slot numbering it must agree with.
+void applyHostBypassStates(
+    TrackRuntime& runtime,
+    const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>&
+        resolveDevicePluginPath) {
+  if (!runtime.hostReady.load(std::memory_order_acquire)) {
+    return;
+  }
+  std::vector<daw::Device> devices;
+  {
+    std::lock_guard<std::mutex> lock(runtime.trackMutex);
+    devices = runtime.track.chain.devices;
+  }
+  // THE HOST'S SLOTS, NOT THE CHAIN'S POSITIONS. This walk counted every VST-KIND device while
+  // rebuildHostForChain omits the ones whose plugin does not resolve, so the two disagreed exactly
+  // when a plugin was missing: with an unresolvable effect ahead of a real one, bypassing the
+  // missing device sent bypass to host slot 0 — which is the REAL plugin — and bypassing the real
+  // one addressed a slot off the end and was dropped. device_chain.h argues at length that bypass
+  // must not filter slots BECAUSE sendSetBypass "needs the index of a device it is about to
+  // bypass"; it reasoned about this call site without checking that it computed the index by a
+  // different rule. host_slot_rule.h is now that rule, for both.
+  std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+  daw::assignHostSlotOccupancy(
+      devices,
+      [&](uint32_t slotIndex) { return resolveDevicePluginPath(runtime, slotIndex); },
+      [&](size_t i, const daw::HostSlotResolution& resolution, uint32_t hostIndex) {
+        if (!resolution.occupies()) {
+          return;
+        }
+        runtime.controller.sendSetBypass(hostIndex, devices[i].bypass);
+      });
+}
+
 
 void emitChainSnapshot(ChainSnapshotDeps& deps, TrackRuntime& runtime) {
   auto& chainVersion = deps.chainVersion;
@@ -160,25 +202,19 @@ void rebuildHostForChain(ChainHostDeps& deps, TrackRuntime& runtime) {
       pluginPaths.reserve(devices.size());
       pluginNames.reserve(devices.size());
       for (const auto& device : devices) {
-        if (device.kind != daw::DeviceKind::VstInstrument &&
-            device.kind != daw::DeviceKind::VstEffect) {
+        // WHICH DEVICES HOLD A HOST SLOT, AND WHERE THEY LOAD FROM — one question, asked in
+        // host_slot_rule.h. This loop and engine_render_track.cpp's walk are the two copies step 2a
+        // caught disagreeing about bypass, and SlotOccupancy exists because that disagreement was
+        // visible only in the audio. The Direct-with-a-real-path case now lives there with its
+        // reasoning; nothing about the rule is restated here.
+        const daw::HostSlotResolution slot =
+            daw::resolveHostSlot(device, [&](uint32_t slotIndex) {
+              return resolveDevicePluginPath(runtime, slotIndex);
+            });
+        if (slot.occupancy == daw::SlotOccupancy::NotHosted) {
           continue;
         }
-        // A device whose vstRef did NOT resolve to a scan index (still Direct) but which
-        // carries a real path on disk must load from THAT path. Otherwise Direct falls
-        // back to the engine's DEFAULT plugin, so a project referencing a plugin the scan
-        // hasn't caught silently loads the wrong plugin instead — an instrument where an
-        // effect was asked for, which then outputs silence. The saved path is the only
-        // identity such a plugin has (same principle as the vstRef fix in M0).
-        std::optional<std::string> path;
-        if (device.hostSlotIndex == daw::kHostSlotIndexDirect &&
-            !device.vstRef.path.empty() &&
-            std::filesystem::exists(device.vstRef.path)) {
-          path = device.vstRef.path;
-        } else {
-          path = resolveDevicePluginPath(runtime, device.hostSlotIndex);
-        }
-        if (!path) {
+        if (slot.occupancy == daw::SlotOccupancy::UnresolvedPlugin) {
           daw::LogLine() << "Engine: missing plugin path for device "
                     << device.id << std::endl;
           continue;
@@ -191,7 +227,7 @@ void rebuildHostForChain(ChainHostDeps& deps, TrackRuntime& runtime) {
         if (hostIndex < 32 && device.vstRef.name == "multiout") {
           auxOutMask |= (1u << hostIndex);
         }
-        pluginPaths.push_back(*path);
+        pluginPaths.push_back(slot.path);
         // The project's intended plugin name selects the right one out of a
         // multi-plugin bundle host-side (Zebra2.vst3 holds several).
         pluginNames.push_back(device.vstRef.name);

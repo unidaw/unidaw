@@ -1,4 +1,5 @@
 #include "apps/artifact_inventory.h"
+#include "apps/device_chain.h"
 
 #include <algorithm>
 #include <map>
@@ -32,12 +33,6 @@ bool isLowercaseHex64(const std::string& text) {
   return true;
 }
 
-// Only a HOSTED plugin has artifacts. A patcher or sampler carries its whole document inside the
-// project file, so an inventory entry naming one is a document claiming a file that can never
-// have been written.
-bool isHostedKind(DeviceKind kind) {
-  return kind == DeviceKind::VstInstrument || kind == DeviceKind::VstEffect;
-}
 
 }  // namespace
 
@@ -162,7 +157,7 @@ bool validateArtifactInventory(const ProjectDocument& document, std::string* err
   std::map<uint32_t, uint32_t> hostedOwner;
   for (const auto& track : document.tracks) {
     for (const auto& device : track.chain.devices) {
-      if (isHostedKind(device.kind)) {
+      if (isHostedDeviceKind(device.kind)) {
         hostedOwner[device.id] = track.trackId;
       }
     }

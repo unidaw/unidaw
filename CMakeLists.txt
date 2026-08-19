@@ -1972,6 +1972,44 @@ set_tests_properties(routing_matrix PROPERTIES TIMEOUT 120)
 add_executable(inbound_audio_tests apps/inbound_audio_tests_main.cpp)
 target_include_directories(inbound_audio_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME inbound_audio COMMAND inbound_audio_tests)
+# WHICH DEVICES HOLD A HOST SLOT — the rule extracted from engine_render_track.cpp's lambda and
+# engine_chain_host.cpp's loop, which step 2a caught disagreeing about bypass. Neither copy was
+# reachable from a test: one needed a TrackRuntime, the other a live plugin host.
+#
+# WHAT THE EXTRACTION ACTUALLY MADE TESTABLE, stated smaller than the first version of this comment.
+# It claimed the compact-index case, and automation_target_tests and execution_snapshot_tests
+# already covered compaction — that claim was false. What had no test anywhere is the
+# Direct-with-a-real-path branch (a device that loads by path holds a slot exactly like one the scan
+# resolved) and the REASON a device holds none, which used to be a bool.
+add_executable(host_slot_rule_tests
+  apps/host_slot_rule_tests_main.cpp
+  apps/execution_snapshot.cpp
+  apps/routing_graph.cpp
+  apps/automation_target.cpp
+  apps/device_chain.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+  apps/patcher_preset.cpp
+  apps/plugin_cache.cpp
+  apps/event_log.cpp
+)
+target_include_directories(host_slot_rule_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+add_test(NAME host_slot_rule COMMAND host_slot_rule_tests)
+set_tests_properties(host_slot_rule PROPERTIES TIMEOUT 60)
+# NO NEW HAND-ROLLED HOST-INDEX WALK. "Which plugin does host slot N mean" was implemented in
+# thirteen places and they had drifted into four live defects — a bypass sent to the wrong plugin,
+# plugin state saved and restored from the wrong slot, and meters attributed to the wrong device.
+# Converting them by hand leaves the fourteenth to be written next month, which is what happened
+# after the last time this shape was found and written down. This is a RATCHET, not a census: it
+# says no new one appeared, and its own docstring is explicit that it cannot say none exists.
+add_test(NAME host_index_walk
+  COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/architecture/host_index_walk_check.py
+)
+set_tests_properties(host_index_walk PROPERTIES TIMEOUT 60)
+
 set_tests_properties(inbound_audio PROPERTIES TIMEOUT 60)
 # The control that would have caught the laundering: a legacy manifest whose embedded pair does
 # not match its own filename must FAIL the load, not be silently restamped to agree.

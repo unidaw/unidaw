@@ -151,14 +151,30 @@ bool clearDeviceEuclideanConfig(TrackChain& chain, uint32_t deviceId);
 // say about them, and the switch is where anyone adding a kind would look.
 uint8_t capabilityMaskForKind(DeviceKind kind);
 
+// IS THIS A DEVICE A PLUGIN HOST CAN HOLD A SLOT FOR? Only the kind question — whether it also
+// RESOLVES to a loadable plugin is host_slot_rule.h's, and the two are deliberately separate: a
+// patcher node can never hold a slot, while a VST whose path is missing is a session someone needs
+// to fix. Named because forEachHostedDevice below and resolveHostSlot both need it, and a predicate
+// spelled out twice is a predicate that can be changed once.
+inline bool isHostedDeviceKind(DeviceKind kind) {
+  return kind == DeviceKind::VstInstrument || kind == DeviceKind::VstEffect;
+}
+// The same question about a whole device, so a caller with one need not reach for `.kind`. Two
+// overloads rather than two functions: artifact_inventory.cpp and device_id_migration.cpp each had
+// their own copy, under the names `isHostedKind` and `isHostedDevice`, differing only in which of
+// these two signatures they took — which is how one predicate came to be spelled three ways.
+inline bool isHostedDeviceKind(const Device& device) { return isHostedDeviceKind(device.kind); }
+
 // WHICH DEVICES OCCUPY A COMPACT HOST SLOT, in order.
 //
 // A host process holds a dense list of plugins and a parameter is addressed by POSITION in it. The
 // position is NOT the device's position in the chain: a patcher or sampler device takes no slot,
 // and neither does a device whose plugin does not resolve here.
 //
-// THE AUTHORITY IS rebuildHostForChain (apps/engine_chain_host.cpp), which is what actually builds
-// `pluginPaths`. This walk must agree with it exactly, and the filter is therefore KIND plus
+// THE AUTHORITY IS host_slot_rule.h. It used to be rebuildHostForChain (apps/engine_chain_host.cpp),
+// which is what actually builds `pluginPaths` — that function is now a CONSUMER of the rule, as is
+// the walk below and the render path. Moving the authority is the whole point of the change; a
+// header still naming the old one sends the next reader to a consumer.
 // RESOLVABILITY — and nothing else.
 //
 // BYPASS IS NOT A FILTER, and getting that wrong is the reason this comment is long. A bypassed
@@ -174,7 +190,7 @@ uint8_t capabilityMaskForKind(DeviceKind kind);
 // The preference belongs at the call site, expressed OVER this walk — see engine_render_track.cpp.
 //
 // `occupiesSlot(device)` answers "does this device's plugin actually load here", and must be the
-// same test rebuildHostForChain applies. A template parameter rather than a std::function because
+// same test host_slot_rule.h applies. A template parameter rather than a std::function because
 // this runs per lane, per block, on the producer path.
 //
 // `fn(index, device)` returns false to stop.
@@ -184,7 +200,7 @@ void forEachHostedDevice(const std::vector<Device>& devices,
                          Fn&& fn) {
   uint32_t index = 0;
   for (const auto& device : devices) {
-    if (device.kind != DeviceKind::VstInstrument && device.kind != DeviceKind::VstEffect) {
+    if (!isHostedDeviceKind(device)) {
       continue;
     }
     if (!occupiesSlot(device)) {

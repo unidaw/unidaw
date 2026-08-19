@@ -32,6 +32,7 @@
 #include "apps/audio_shm.h"
 #include "apps/engine_instance.h"
 #include "apps/engine_types.h"
+#include "apps/host_slot_rule.h"
 #include "apps/engine_producer_helpers.h"
 #include "apps/engine_audio_callback.h"
 #include "apps/engine_audio_start.h"
@@ -1060,25 +1061,11 @@ int main(int argc, char** argv) {
     return resolvePluginPath(hostSlotIndex);
   };
 
+  // A THIN BINDING, because the body belongs with the module that declares it as a dependency.
+  // It grew main() past the ceiling progress_check enforces, and that check says what to do:
+  // "Move logic OUT of main() rather than raising the ceiling."
   auto applyHostBypassStates = [&](TrackRuntime& runtime) {
-    if (!runtime.hostReady.load(std::memory_order_acquire)) {
-      return;
-    }
-    std::vector<daw::Device> devices;
-    {
-      std::lock_guard<std::mutex> lock(runtime.trackMutex);
-      devices = runtime.track.chain.devices;
-    }
-    uint32_t hostIndex = 0;
-    std::lock_guard<std::mutex> lock(runtime.controllerMutex);
-    for (const auto& device : devices) {
-      if (device.kind != daw::DeviceKind::VstInstrument &&
-          device.kind != daw::DeviceKind::VstEffect) {
-        continue;
-      }
-      runtime.controller.sendSetBypass(hostIndex, device.bypass);
-      hostIndex++;
-    }
+    daw::engine::applyHostBypassStates(runtime, resolveDevicePluginPath);
   };
 
   daw::engine::ChainHostDeps chainHostDeps{
