@@ -1,5 +1,6 @@
 // Bodies for apps/engine_device_commands.h. Each moved verbatim out of handleUiEntry.
 #include "apps/engine_device_commands.h"
+#include "apps/host_slot_rule.h"
 
 #include <algorithm>
 #include <cstring>
@@ -85,7 +86,8 @@ void handleOpenPluginEditor(DeviceCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& tracks = deps.engineState.trackTable.tracks;
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
-  const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
+  // resolveDevicePluginPath is no longer read in this handler: the host-index lookup now asks
+  // the recorded mapping, so it needs neither the plugin scan nor the filesystem.
   {
   const uint32_t trackId = payload.trackId;
   const uint32_t deviceId = payload.value0;
@@ -100,23 +102,13 @@ void handleOpenPluginEditor(DeviceCommandDeps& deps,
     std::lock_guard<std::mutex> lock(runtime->trackMutex);
     devices = runtime->track.chain.devices;
   }
+  // WHERE A DEVICE ANSWERS — the recorded slot. The walk this replaces omitted the
+  // Direct-with-a-real-path case, so opening an editor or setting a parameter on a chain whose
+  // first plugin loads by path off disk reached the wrong plugin.
   auto resolveHostIndexForDevice =
       [&](uint32_t targetDeviceId) -> std::optional<uint32_t> {
-        uint32_t hostIndex = 0;
-        for (const auto& device : devices) {
-          if (device.kind != daw::DeviceKind::VstInstrument &&
-              device.kind != daw::DeviceKind::VstEffect) {
-            continue;
-          }
-          if (!resolveDevicePluginPath(*runtime, device.hostSlotIndex)) {
-            continue;
-          }
-          if (device.id == targetDeviceId) {
-            return hostIndex;
-          }
-          ++hostIndex;
-        }
-        return std::nullopt;
+        std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+        return daw::recordedHostIndexOf(*runtime, targetDeviceId);
       };
   const auto hostIndex = resolveHostIndexForDevice(deviceId);
   if (!hostIndex) {
@@ -171,7 +163,8 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto& playing = deps.engineState.transport.playing;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
-  const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
+  // resolveDevicePluginPath is no longer read in this handler: the host-index lookup now asks
+  // the recorded mapping, so it needs neither the plugin scan nor the filesystem.
   {
   // A rack knob write: resolve deviceId -> host plugin index (same walk as the
   // params read-back) and forward it to the host over the control socket. Fire-
@@ -184,26 +177,21 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
   uint32_t pluginIndex = 0;
   bool found = false;
   if (runtime) {
-    std::lock_guard<std::mutex> lock(runtime->trackMutex);
-    uint32_t hostIndex = 0;
-    for (const auto& d : runtime->track.chain.devices) {
-      if (d.kind != daw::DeviceKind::VstInstrument &&
-          d.kind != daw::DeviceKind::VstEffect) {
-        continue;
-      }
-      // Count only devices that resolve to a host plugin. rebuildHostForChain
-      // omits a path-unresolvable device from the SetChain it sends, so the host's
-      // plugin vector is compacted; counting it here would shift every later
-      // device's index and route the write to the wrong plugin (or off the end).
-      if (!resolveDevicePluginPath(*runtime, d.hostSlotIndex)) {
-        continue;
-      }
-      if (d.id == sp.deviceId) {
-        pluginIndex = hostIndex;
-        found = true;
-        break;
-      }
-      hostIndex++;
+    // WHERE THIS DEVICE ANSWERS — the recorded slot. Taken WITHOUT trackMutex, because the mapping
+    // is not part of the track document: it is what the host was built with, guarded by
+    // controllerMutex, and nesting the two here would add an ordering this codebase does not have.
+    //
+    // The walk this replaces skipped devices whose plugin does not resolve, which is nearly the
+    // host's rule and not quite it — it omits the Direct-with-a-real-path case, so a parameter write
+    // on a chain whose first plugin loads by path off disk went to the wrong plugin or off the end.
+    std::optional<uint32_t> slot;
+    {
+      std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+      slot = daw::recordedHostIndexOf(*runtime, sp.deviceId);
+    }
+    if (slot) {
+      pluginIndex = *slot;
+      found = true;
     }
   }
   bool forwarded = false;

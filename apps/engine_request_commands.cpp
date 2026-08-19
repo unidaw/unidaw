@@ -1,5 +1,6 @@
 // Bodies for apps/engine_request_commands.h. Each moved verbatim out of handleUiEntry.
 #include "apps/engine_request_commands.h"
+#include "apps/host_slot_rule.h"
 
 #include <algorithm>
 #include <cstring>
@@ -49,7 +50,7 @@ void handleRequestDeviceParams(RequestCommandDeps& deps,
   auto& uiShm = deps.uiShm;
   auto& tracks = deps.engineState.trackTable.tracks;
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
-  const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
+  // resolveDevicePluginPath is no longer read here: the slot comes from the recorded mapping.
   {
   // Publish one device's parameters into UiDeviceParamsRegion so the rack can
   // show real names + values. trackId + value0 (deviceId). The host query is a
@@ -62,26 +63,30 @@ void handleRequestDeviceParams(RequestCommandDeps& deps,
   uint32_t pluginIndex = 0;
   bool found = false;
   if (runtime) {
-    std::lock_guard<std::mutex> lock(runtime->trackMutex);
-    uint32_t hostIndex = 0;
-    for (const auto& d : runtime->track.chain.devices) {
-      if (d.kind != daw::DeviceKind::VstInstrument &&
-          d.kind != daw::DeviceKind::VstEffect) {
-        continue;
+    // WHERE THIS DEVICE ANSWERS, and what it is called — two facts from two owners.
+    //
+    // The slot comes from the recorded mapping, taken under controllerMutex and BEFORE trackMutex so
+    // the two are never nested. The NAME is document state and still comes from the chain.
+    //
+    // The walk this replaces carried the right intent — its own comment says it skips devices that
+    // do not resolve "matching the host's compacted plugin vector ... otherwise the read-back
+    // reports a shifted / wrong plugin's params" — and applied it with a rule that is nearly the
+    // host's: it omits the Direct-with-a-real-path case, which is exactly the shift it warns about.
+    std::optional<uint32_t> slot;
+    {
+      std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+      slot = daw::recordedHostIndexOf(*runtime, deviceId);
+    }
+    if (slot) {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      for (const auto& d : runtime->track.chain.devices) {
+        if (d.id == deviceId) {
+          pluginIndex = *slot;
+          deviceName = d.vstRef.name;
+          found = true;
+          break;
+        }
       }
-      // Skip a device that does not resolve to a host plugin, matching the host's
-      // compacted plugin vector (rebuildHostForChain omits it from SetChain);
-      // otherwise the read-back reports a shifted / wrong plugin's params.
-      if (!resolveDevicePluginPath(*runtime, d.hostSlotIndex)) {
-        continue;
-      }
-      if (d.id == deviceId) {
-        pluginIndex = hostIndex;
-        deviceName = d.vstRef.name;
-        found = true;
-        break;
-      }
-      hostIndex++;
     }
   }
   // A request for a device that does not resolve wrote nothing to the region

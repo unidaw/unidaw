@@ -1,6 +1,7 @@
 // Bodies for apps/engine_rt_helpers.h. The WHY for each rule is in the header, beside the
 // declaration; this file is the mechanics only.
 #include "apps/engine_rt_helpers.h"
+#include "apps/host_slot_rule.h"
 
 #include <limits>
 
@@ -421,22 +422,15 @@ void applyBlockRateModulation(BlockModCtx& ctx) {
     }
     return std::nullopt;
   };
+  // WHERE A DEVICE ANSWERS — the recorded slot, not a re-derivation.
+  //
+  // This walked the chain skipping devices whose plugin does not resolve, which is nearly the
+  // host's rule and not quite it: it omits the Direct-with-a-real-path case, so a chain whose
+  // first plugin loads by path off disk numbered every later device one too low and aimed a
+  // modulation link at the wrong plugin.
   auto resolveHostIndexForDevice = [&](uint32_t deviceId) -> std::optional<uint32_t> {
-    uint32_t hostIndex = 0;
-    for (const auto& device : chainDevices) {
-      if (device.kind != daw::DeviceKind::VstInstrument &&
-          device.kind != daw::DeviceKind::VstEffect) {
-        continue;
-      }
-      if (!ctx.resolveDevicePluginPath(ctx.runtime, device.hostSlotIndex)) {
-        continue;
-      }
-      if (device.id == deviceId) {
-        return hostIndex;
-      }
-      ++hostIndex;
-    }
-    return std::nullopt;
+    std::lock_guard<std::mutex> lock(ctx.runtime.controllerMutex);
+    return daw::recordedHostIndexOf(ctx.runtime, deviceId);
   };
   for (const auto& link : ctx.trackState.modLinks) {
     const auto srcPos = chainPos.find(link.source.deviceId);
