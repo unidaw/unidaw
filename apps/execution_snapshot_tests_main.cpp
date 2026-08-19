@@ -131,9 +131,9 @@ void aReorderMovesTheAddressAndKeepsTheIdentity() {
   expect(deviceIn(*before, 0, 7)->resolvedPluginName == deviceIn(*after, 0, 7)->resolvedPluginName,
          "while what the device IS followed its id, not its slot");
 
-  expect(before->tracks.front().hostSegments().pluginNames ==
+  expect(before->tracks.front().hostSegments().pluginNames() ==
              std::vector<std::string>({"eq", "comp"}), "the carrier is in chain order before");
-  expect(after->tracks.front().hostSegments().pluginNames ==
+  expect(after->tracks.front().hostSegments().pluginNames() ==
              std::vector<std::string>({"comp", "eq"}),
          "and in the NEW chain order after — a carrier ordered by id would load them wrong");
 }
@@ -145,7 +145,7 @@ void anUnresolvedPluginTakesNoSlotAndShiftsTheOnesBelow() {
                                 hosted(9, 1, "comp")})}, 1, 10, &e);
   expect(s.has_value(), "a chain with an unresolved device in the middle builds");
   if (!s) return;
-  expect(s->tracks.front().hostSegments().pluginNames == std::vector<std::string>({"eq", "comp"}),
+  expect(s->tracks.front().hostSegments().pluginNames() == std::vector<std::string>({"eq", "comp"}),
          "the unresolved device contributes nothing to the carrier");
   expect(deviceIn(*s, 0, 8)->compactIndex == daw::kNoCompactIndex,
          "it carries NO address — a stale index is how an unloaded device gets addressed as loaded");
@@ -748,12 +748,39 @@ void theCarrierDerivationIsAssertedNotOnlyCrossChecked() {
   const auto segments = daw::compileTrackHostSegments(
       {hosted(7, 0, "eq"), unhosted(8, daw::SlotOccupancy::UnresolvedPlugin),
        hosted(9, 1, "multiout"), hosted(11, 2, "verb")}, false);
-  expect(segments.pluginNames == std::vector<std::string>({"eq", "multiout", "verb"}),
+  expect(segments.pluginNames() == std::vector<std::string>({"eq", "multiout", "verb"}),
          "the carrier holds the hosted plugins in chain order");
   expect(segments.auxOutMask == (1u << 1),
          "and the aux-out bit is set for CARRIER slot 1 — the multi-out plugin is third in the "
          "chain and second in the carrier, because the unresolved device takes no slot");
   expect(segments.sidechainMask == 0u, "with no key source bound, no sidechain bit");
+  
+  // AND EACH SLOT NAMES ITS DEVICE. This is the half the carrier used to discard: it held paths
+  // and names in host-slot order and not which device each slot was, so thirteen sites across the
+  // engine rebuilt the mapping from the chain plus a resolver plus the filesystem, and four of
+  // them rebuilt it wrongly — a bypass sent to another plugin, plugin state saved from the wrong
+  // slot, meters on the wrong device.
+  //
+  // The unresolved device at chain position 1 is what makes this a real assertion rather than a
+  // restatement of the chain: carrier slot 1 is device 9, NOT device 8, and every naive walk that
+  // has gone wrong in this codebase went wrong by answering 8.
+  expect(segments.slots.size() == 3, "one slot per hosted device");
+  expect(segments.slots[0].stableDeviceId == 7 && segments.slots[1].stableDeviceId == 9 &&
+             segments.slots[2].stableDeviceId == 11,
+         "each slot names the device that occupies it, skipping the unresolved one");
+  expect(segments.hostIndexOf(7) == 0u && segments.hostIndexOf(9) == 1u &&
+             segments.hostIndexOf(11) == 2u,
+         "and a device can be asked where it answers");
+  expect(!segments.hostIndexOf(8).has_value(),
+         "the unresolved device answers NOWHERE — nothing, not a sentinel, because returning one "
+         "here is the silent widening that aimed a lane at every plugin on the track");
+  expect(!segments.hostIndexOf(999).has_value(), "and neither does a device that is not present");
+  
+  // THE ACCESSORS AGREE WITH THE SLOTS, because they are derived from them rather than stored
+  // beside them. Two stored vectors is what could fall out of step; this cannot.
+  expect(segments.pluginPaths().size() == segments.slots.size() &&
+             segments.pluginNames().size() == segments.slots.size(),
+         "the flat lists a launch sends are exactly as long as the slots they come from");
 
   expect(daw::compileTrackHostSegments({hosted(7, 0, "multiout"), hosted(9, 1, "eq"),
                                         hosted(11, 2, "multiout")}, false).auxOutMask ==
@@ -784,7 +811,7 @@ void bypassDoesNotChangeSlotOccupancy() {
   auto s = build({plan}, 1, 10, &e);
   expect(s.has_value(), "a chain with a bypassed plugin builds");
   if (!s) return;
-  expect(s->tracks.front().hostSegments().pluginNames == std::vector<std::string>({"eq", "comp"}),
+  expect(s->tracks.front().hostSegments().pluginNames() == std::vector<std::string>({"eq", "comp"}),
          "the bypassed plugin is STILL in the carrier — the host holds it either way");
   expect(deviceIn(*s, 0, 9)->compactIndex == 1,
          "so the device after it keeps its address: bypass is not a slot change");

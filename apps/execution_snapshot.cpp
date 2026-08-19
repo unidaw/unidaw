@@ -95,16 +95,18 @@ TrackHostSegments compileTrackHostSegments(const std::vector<DevicePlan>& device
     }
     // MULTI-OUT IS DECIDED HERE, ONCE, from the plan's resolved name — rebuildHostForChain derives
     // it from the live chain today, which is the second authority the ruling removes.
-    const uint32_t hostIndex = static_cast<uint32_t>(out.pluginPaths.size());
+    const uint32_t hostIndex = static_cast<uint32_t>(out.slots.size());
     if (hostIndex < 32 && device.resolvedPluginName == "multiout") {
       out.auxOutMask |= (1u << hostIndex);
     }
-    out.pluginPaths.push_back(device.resolvedPluginPath);
-    out.pluginNames.push_back(device.resolvedPluginName);
+    // THE DEVICE ID GOES IN WITH THE PATH. It was already in hand here and was dropped, which is
+    // why thirteen sites downstream rebuild the mapping this loop is computing.
+    out.slots.push_back(HostSlot{device.resolvedPluginPath, device.resolvedPluginName,
+                                 device.stableDeviceId});
   }
   // Bit 0 keys the FIRST plugin's sidechain when a source is bound; with no plugins there is
   // nothing to key.
-  out.sidechainMask = (sidechainSourceBound && !out.pluginPaths.empty()) ? 1u : 0u;
+  out.sidechainMask = (sidechainSourceBound && !out.slots.empty()) ? 1u : 0u;
   return out;
 }
 

@@ -215,7 +215,7 @@ void manyPublishersAndManyReadersNeverSeeATornSnapshot() {
               torn.store(true, std::memory_order_release);
             }
           }
-          if (plan.hostSegments().pluginNames.size() > plan.devices.size()) {
+          if (plan.hostSegments().pluginNames().size() > plan.devices.size()) {
             torn.store(true, std::memory_order_release);
           }
         }

@@ -108,17 +108,70 @@ struct DevicePlan {
   std::vector<std::pair<uint32_t, uint32_t>> patcherNodeMapping;
 };
 
+// ONE SLOT OF A TRACK'S HOST, holding everything the slot IS.
+//
+// The device id is here because leaving it out is the defect this record exists about.
+// `rebuildHostForChain` stores `pluginPaths` and `pluginNames` in host-slot order and NOT which
+// device each slot holds — so the one function that knows the mapping exactly, having just built it,
+// discards the half every consumer needs. Thirteen sites across the engine then reconstruct it from
+// the chain plus a plugin resolver plus the filesystem, and four of them reconstruct it WRONGLY:
+// a bypass sent to another plugin, plugin state saved and restored from the wrong slot, meters
+// attributed to the wrong device.
+//
+// DERIVING IS NOT MERELY DUPLICATIVE, IT ANSWERS A DIFFERENT QUESTION. A derivation says which slot
+// a device SHOULD hold; every one of those consumers needs the slot it DOES hold. Those differ
+// exactly when the chain has changed since the last successful reconcile — which is the moment a
+// wrong answer sends a parameter into another plugin.
+struct HostSlot {
+  std::string pluginPath;
+  std::string pluginName;
+  // The device this slot holds. Never kNoCompactIndex-style sentinels: a HostSlot exists only for a
+  // device that occupies, so there is always exactly one id, and a slot with no device cannot be
+  // represented.
+  uint32_t stableDeviceId = 0;
+};
+
 // THE LAUNCH CARRIER, compiled from the plan above and never authored beside it.
 //
-// `rebuildHostForChain` builds `pluginPaths`/`pluginNames` straight from the live chain today, which
-// makes HostConfig a second authority: two readers of "what is in this host" can disagree, and the
-// one that loses is whichever ran first. These vectors are derived from `devices` by
-// compileTrackHostSegments and are the only thing a launch may read.
+// `rebuildHostForChain` builds its plugin list straight from the live chain today, which makes
+// HostConfig a second authority: two readers of "what is in this host" can disagree, and the one
+// that loses is whichever ran first. `slots` is derived from `devices` by compileTrackHostSegments
+// and is the only thing a launch may read.
+//
+// ONE VECTOR OF SLOTS, NOT PARALLEL VECTORS PER FIELD. Paths and names were already two vectors that
+// had to stay the same length and the same order; adding the device id as a third would be the same
+// defect with more surface. A slot is one thing, so it is one struct.
 struct TrackHostSegments {
-  std::vector<std::string> pluginPaths;
-  std::vector<std::string> pluginNames;
+  std::vector<HostSlot> slots;
   uint32_t sidechainMask = 0;
   uint32_t auxOutMask = 0;
+
+  // WHERE A DEVICE ANSWERS, if it is hosted at all. Nothing, not a sentinel, when it holds no slot:
+  // the render path already learned that returning an all-target sentinel here is "a SILENT
+  // WIDENING" that broadcasts one device's automation to every plugin on the track.
+  std::optional<uint32_t> hostIndexOf(uint32_t stableDeviceId) const {
+    for (size_t i = 0; i < slots.size(); ++i) {
+      if (slots[i].stableDeviceId == stableDeviceId) {
+        return static_cast<uint32_t>(i);
+      }
+    }
+    return std::nullopt;
+  }
+
+  // The flat lists a launch sends. Derived on demand rather than stored, so they cannot fall out of
+  // step with `slots` — which is what two stored vectors could do and this replaces.
+  std::vector<std::string> pluginPaths() const {
+    std::vector<std::string> out;
+    out.reserve(slots.size());
+    for (const auto& slot : slots) out.push_back(slot.pluginPath);
+    return out;
+  }
+  std::vector<std::string> pluginNames() const {
+    std::vector<std::string> out;
+    out.reserve(slots.size());
+    for (const auto& slot : slots) out.push_back(slot.pluginName);
+    return out;
+  }
 };
 
 // A DISABLED LEGACY TARGET, kept rather than dropped.
