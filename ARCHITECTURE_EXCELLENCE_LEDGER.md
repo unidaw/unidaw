@@ -7398,3 +7398,46 @@ broadcasts one device's automation to every plugin on the track, and the same an
 
 This is the input the thirteen walks were missing. Converting them is next, and the walk ratchet's
 owed list is the worklist that must empty.
+
+### Silent tests, and a verification that tested one path three times
+
+The suite now runs without making a sound, which it can do for free because of where the capture tap
+sits: `captureMasterOutput` runs BEFORE anything reaches the hardware, so zeroing the device buffer
+after it leaves every assertion reading exactly what it read before. `DAW_SILENT_OUTPUT=1` does that,
+and ctest sets it for all 248 tests in one block — `ENVIRONMENT_MODIFICATION` rather than
+`ENVIRONMENT` so it appends instead of clobbering a test that later needs its own environment.
+Applied to every test rather than to today's noisy ones, because *which* checks make sound changes
+whenever a check is added. Run by hand, a check stays audible.
+
+### The first probe proved nothing, and looked like proof
+
+The obvious verification is: run the engine twice, with and without the flag, and compare the
+captured WAVs. Mine reported **byte-identical**. It was worthless — the probe ran no project, so both
+captures were pure silence: `peak=0.0000 nonzero=0/529200`. **A comparison of two silences is
+satisfied by any implementation, including one that breaks everything.**
+
+This is the setup supplying the precondition the test exists to check, and it was caught only because
+the peak looked too convenient. The real verification is checks that assert on captured LEVELS —
+`level_match_bypass`, `master_fx`, `sidechain` — passing under silence with their own output showing
+real measurement ("raw steps 2.00x", "FX engaged and audible"). The control is decisive in the other
+direction: move the zeroing ABOVE the tap and both fail with exactly the right diagnosis, "was
+silent" and "captured almost no audio".
+
+### Then 44 checks failed at once, and the reason is the better lesson
+
+The full suite came back 82%: **44 failures, every one of them an offline render.** In offline mode
+the same callback is driven by a pump and the buffer being zeroed IS THE RENDER — there is no
+hardware to silence and nobody to protect from it. The change was not muting a speaker, it was
+deleting the deliverable.
+
+**My verification could not have caught it.** I picked three checks that assert on captured audio —
+and all three run a live engine. Three checks, one path, tested three times. The offline path, which
+is the larger half of the suite, was never exercised until ctest exercised it.
+
+**Choosing test cases by what they ASSERT and not by which PATH they take is how a verification comes
+out green on a broken change.** The two paths here are visible in one `if` in `engine_audio_start.cpp`
+— `if (offlineRender) { pump } else if (audioBackend->start(...))` — and I had read that exact line
+an hour earlier, to establish that offline renders make no noise. I used it to decide the feature was
+unnecessary for them and not to decide it was *dangerous* for them.
+
+The guard is `m_silentOutput && !m_offline`, and the comment beside it says what it cost.
