@@ -7582,3 +7582,40 @@ recorded mapping under `controllerMutex`, the name from the chain under `trackMu
 order and never nested. `lock_order_check` still reports two distinct nestings, none inverted.
 
 **Owed: 2, from 13 — and one of the two is the mis-described entry that was never work.**
+
+### The last walk, and the lock that was already there
+
+`engine_produce_block`'s segment builder was the one held back, because it needs chain *adjacency* as
+well as an index — it groups contiguous hosted devices into segments with a start and a length — and
+it runs on the per-block producer path, where a blocking mutex is not free.
+
+**That turned out to be a question with a measurable answer rather than a judgement call.** The
+producer takes `controllerMutex` at the top of each track — *blocking* when rendering offline,
+`try_to_lock` in realtime so it is never stalled by the command thread — and that lock is held from
+line 385 to line 1162. The segment walk sits at 655. It was already inside it, and
+`controllerMutex` is exactly the lock guarding `hostSlotDevices`.
+
+So the conversion needed **no new lock at all**, and it takes a `resolveDevicePluginPath` call — which
+can touch the filesystem — *off* the per-block path.
+
+I checked that by finding where the scope closes, ignoring braces inside comments and string literals,
+rather than by eyeballing indentation. A first attempt counted raw braces and would have answered the
+same way here by luck; the difference matters because the wrong answer would have been a data race the
+suite could not see.
+
+### Thirteen of thirteen
+
+The population is converted. `host_index_walk_check` reports one file remaining, and it is the
+bit-scan over `auxOutMask` that was never a defect — listed because the heuristic cannot tell a
+bit-scan from a device walk, with an entry that now says so.
+
+What the thirteen were: **one question — which plugin does host slot N mean — implemented
+independently thirteen times, disagreeing in at least six of them.** Four were wrong for any chain
+containing an unresolvable plugin; five more for any chain containing a load-by-path plugin. They
+addressed bypasses, plugin state on save and on load, meters, modulation links, editors, parameter
+writes, parameter read-backs, bus layouts and PDC segment boundaries — every one of them at a plugin
+that was not the one meant.
+
+None of it was reachable from a test, because the answer was recomputed at each site from a chain, a
+plugin resolver and the filesystem. **The fix was not thirteen corrections; it was to record the
+mapping once, where it is already known, and delete the question.**
