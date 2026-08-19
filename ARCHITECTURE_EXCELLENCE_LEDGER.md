@@ -7619,3 +7619,36 @@ that was not the one meant.
 None of it was reachable from a test, because the answer was recomputed at each site from a chain, a
 plugin resolver and the filesystem. **The fix was not thirteen corrections; it was to record the
 mapping once, where it is already known, and delete the question.**
+
+### A check that violated its own rule three lines below stating it
+
+The final suite failed `automation_readback` — once, in thirteen full runs today, in the run
+containing the last conversion. The tempting readings are "flake" and "I broke it", and both would
+have been wrong.
+
+**Structurally it could not be the change**: `produce_block`'s segments feed host processing, not
+automation lane publication. And the check's own comment describes this exact symptom from before —
+*"it failed inside a full ctest with 'lane cutoff on track 0 reports MISSING points' while passing 6/6
+standalone … in fact a read that arrived before the publish."*
+
+The cause is in the poll that was added to fix that earlier occurrence. It waits for **at least two
+lanes**, then asserts on **a specific lane's point count** — so two *other* lanes publishing first
+satisfy the poll while `cutoff` is still absent. The paragraph directly above it says *"Wait on the
+condition you are about to assert on"*, and the predicate three lines below waits on a proxy for it.
+
+**Writing the rule down is not the same as following it, and the gap can be three lines wide.**
+
+### The fix was very nearly a silent no-op
+
+My replacement predicate matched lanes on `track` and `param_id` and counted a points *list*. The
+publisher emits `track_id` and `param`, and `points` is a *count*. I had guessed the shape instead of
+reading `lane_field`, twenty lines below, which does exactly this lookup correctly.
+
+That predicate can never return 0. It would have polled the full 30 seconds, fallen through the
+`|| true` that deliberately lets the assertions run anyway, and left the check passing — **by luck,
+slower by half a minute, with the race untouched**. From outside, a poll that cannot succeed and a
+poll that always succeeds look identical.
+
+Caught by asking for the JSON shape rather than assuming it, and confirmed by timing: the check now
+completes in 5 seconds, not 35. **A wait is verified by how long it takes, not by whether the thing
+after it passed.**
