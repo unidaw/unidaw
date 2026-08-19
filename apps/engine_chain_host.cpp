@@ -52,7 +52,8 @@ void applyHostBypassStates(
 void emitChainSnapshot(ChainSnapshotDeps& deps, TrackRuntime& runtime) {
   auto& chainVersion = deps.chainVersion;
   auto& getRingUiOut = deps.getRingUiOut;
-  auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
+  // resolveDevicePluginPath is no longer read here: the slot comes from the recorded mapping,
+  // so this function needs neither the plugin scan nor the filesystem.
 
     // Movement 4: an aux child has no host chain to enumerate.
     if (runtime.isAuxChild.load(std::memory_order_acquire)) {
@@ -82,22 +83,30 @@ void emitChainSnapshot(ChainSnapshotDeps& deps, TrackRuntime& runtime) {
       sendUiDiff(deps.uiPublishDeps, ringUiOut, daw::EventType::UiDiff, diffPayload);
       return;
     }
-    uint32_t hostIndex = 0;
     for (uint32_t i = 0; i < devices.size(); ++i) {
       const auto& device = devices[i];
-      // Movement 4: a VST device that resolves to a host plugin carries a bus
-      // topology. The host index is the compacted position among resolvable VST
-      // devices — the same walk the param read-back uses, so it stays aligned.
-      const bool isVst = device.kind == daw::DeviceKind::VstInstrument ||
-                         device.kind == daw::DeviceKind::VstEffect;
-      const bool resolves =
-          isVst &&
-          resolveDevicePluginPath(runtime, device.hostSlotIndex).has_value();
+      // Movement 4: a VST device the host is holding carries a bus topology, and the slot to ask
+      // about is the RECORDED one.
+      //
+      // This derived the slot by counting resolvable VST devices, and its own comment claimed it was
+      // "the same walk the param read-back uses, so it stays aligned". It was not: it omitted the
+      // Direct-with-a-real-path case, so a chain whose first plugin loads by path off disk gave that
+      // device resolves=false, never advanced, and asked for the SECOND plugin's bus layout under the
+      // first plugin's id. The UI then drew one plugin's bus topology against another's device.
+      //
+      // hostSlotDevices removes the walk rather than repairing it — no kind test, no resolver, no
+      // filesystem, and no way to be out of step with the host it describes.
+      std::optional<uint32_t> slot;
+      {
+        std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+        slot = daw::recordedHostIndexOf(runtime, device.id);
+      }
+      const bool resolves = slot.has_value();
       std::vector<daw::HostBusWire> buses;
       bool busTruncated = false;
       if (resolves) {
         std::lock_guard<std::mutex> lock(runtime.controllerMutex);
-        runtime.controller.requestBusLayout(hostIndex, buses, busTruncated);
+        runtime.controller.requestBusLayout(*slot, buses, busTruncated);
       }
 
       daw::UiChainDiffPayload diffPayload{};
@@ -153,7 +162,6 @@ void emitChainSnapshot(ChainSnapshotDeps& deps, TrackRuntime& runtime) {
       }
 
       if (resolves) {
-        ++hostIndex;
       }
     }
 
@@ -161,8 +169,14 @@ void emitChainSnapshot(ChainSnapshotDeps& deps, TrackRuntime& runtime) {
     // plugin's getLatencySamples) so the consumer loop can delay-compensate this track
     // against the highest-latency one. One control round-trip per chain edit, off the
     // RT path; a host that isn't up yet leaves the cached 0 (no compensation) until the
-    // next emit. hostIndex > 0 means at least one device resolved to a live host.
-    if (hostIndex > 0) {
+    // next emit. A non-empty mapping means at least one device is held by a live host — the same
+    // question the counter answered, asked of the record rather than of a re-derivation.
+    bool anyHosted = false;
+    {
+      std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+      anyHosted = !runtime.hostSlotDevices.empty();
+    }
+    if (anyHosted) {
       uint32_t totalLatency = 0;
       std::vector<int32_t> perPlugin;
       bool ok = false;

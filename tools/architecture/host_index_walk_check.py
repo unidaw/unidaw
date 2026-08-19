@@ -52,10 +52,6 @@ COUNTER = re.compile(r"\b(host(?:Index|Idx|Slot)\w*)\s*\+\+|\+\+\s*\b(host(?:Ind
 # and fails if a file named here no longer has one (so a fixed site cannot stay on the list and
 # quietly license a new walk in the same file).
 OWED = {
-    "engine_chain_host.cpp": "emitChainSnapshot -- tests resolvability but MISSES the "
-                             "Direct-with-a-real-path branch, so a chain whose first plugin loads by "
-                             "path requests the SECOND plugin's bus layout under the first's id. Its "
-                             "own comment claims it is 'the same walk the param read-back uses'.",
     "engine_rt_helpers.cpp": "resolvability without the Direct branch -- modulation link targets.",
     "engine_device_commands.cpp": "resolvability without the Direct branch -- open editor, set param.",
     "engine_request_commands.cpp": "resolvability without the Direct branch -- params read-back.",
