@@ -802,6 +802,35 @@ public:
       }
     }
 
+    // SILENT OUTPUT: the suite is a measuring instrument, not a DAW.
+    //
+    // Every audio assertion in this repository reads the CAPTURE, taken immediately above — so what
+    // reaches the hardware after this point is heard by nobody and asserted by nothing. Zeroing it
+    // lets a full suite run beside whatever the machine's owner is listening to.
+    //
+    // THE POSITION IS THE WHOLE DESIGN. This must stay BELOW captureMasterOutput and below the
+    // downmix, or the capture goes silent too and every one of those assertions measures the muting
+    // instead of the engine. "This does not weaken testing" is exactly the claim "the captured WAV is
+    // byte-identical with and without it", which is checked rather than argued — with a control that
+    // moves this above the tap and watches the captures diverge.
+    //
+    // NOT AUTOMATIC WHEN CAPTURING. Someone debugging a check by hand wants to hear it; ctest sets
+    // DAW_SILENT_OUTPUT for every test and a bare run of the same script stays audible.
+    // AND NEVER OFFLINE, which is not a refinement but the difference between silencing a speaker
+    // and deleting the deliverable. Rendering to a file drives this same callback from a pump and
+    // the buffer below IS THE RENDER — there is no hardware to silence and nobody to protect from
+    // it. Without this guard 44 checks failed at once, every one of them an offline render, because
+    // their WAVs came out empty. The first round of verification missed it by picking three
+    // live-engine checks and thereby testing one path three times.
+    if (m_silentOutput && !m_offline) {
+      for (int ch = 0; ch < numOutputChannels; ++ch) {
+        if (outputChannelData[ch]) {
+          std::memset(outputChannelData[ch], 0,
+                      static_cast<size_t>(numSamples) * sizeof(float));
+        }
+      }
+    }
+
     // Advance playback clock even if tracks are late to avoid global stalls.
     if (playedBlock || hasActiveTrack) {
       m_lastPlayedBlockId = nextBlockToPlay;
@@ -833,6 +862,9 @@ public:
   int captureChannels() const { return m_captureChannels; }
 
   void setOfflineMode(bool on) { m_offline = on; }
+    // Silence what reaches the hardware, without touching what is captured or measured. The block
+    // in the callback explains why the position matters more than the flag does.
+    void setSilentOutput(bool on) { m_silentOutput = on; }
 
   // OFFLINE ONLY. Wait until at least one track is ready to contribute, so the per-block wait
   // below has something to wait FOR.
@@ -1224,6 +1256,7 @@ private:
   // never skip a block to stay current, never prime with silence, and never starve — the pump
   // waits instead, so the mix is glitch-free by construction rather than by luck.
   bool m_offline = false;
+    bool m_silentOutput = false;
   uint32_t m_lastPlayedBlockId = 0;  // Track which block we played last
   uint32_t m_primeWait = 0;          // callbacks spent priming the pipeline after Play
 

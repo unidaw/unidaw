@@ -102,6 +102,15 @@ void startAudioDevice(AudioStartDeps& deps) {
         }
       }
       audioCallback->resetForStart();
+        // DAW_SILENT_OUTPUT=1 silences the hardware and nothing else — the capture is taken before
+        // it. ctest sets it for every test so a suite can run beside someone's music; a check run
+        // by hand stays audible, which is what a human debugging one wants.
+        if (const char* silent = std::getenv("DAW_SILENT_OUTPUT")) {
+          if (*silent != '\0' && *silent != '0') {
+            audioCallback->setSilentOutput(true);
+            DAW_EVENT("audio.silent_output").field("source", std::string("DAW_SILENT_OUTPUT"));
+          }
+        }
       // DAW_CAPTURE_WAV=<path> records the master output so a take can be
       // analysed offline; DAW_CAPTURE_SECONDS bounds the preallocation.
       if (const char* capturePath = std::getenv("DAW_CAPTURE_WAV")) {

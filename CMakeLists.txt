@@ -2734,3 +2734,16 @@ foreach(daw_test_target
     target_compile_options(${daw_test_target} PRIVATE -UNDEBUG)
   endif()
 endforeach()
+
+# THE SUITE RUNS SILENT. Every audio assertion here reads the engine's internal capture, taken before
+# anything reaches the hardware, so what the speakers get is heard by nobody and asserted by nothing.
+# Without this a full run interrupts whatever the machine's owner is listening to for twenty minutes.
+#
+# ENVIRONMENT_MODIFICATION rather than ENVIRONMENT so this APPENDS. No test sets ENVIRONMENT today,
+# and a future one that did would otherwise be silently clobbered by whichever ran last.
+#
+# Applied to every registered test rather than to the ones that are noisy today, because "which
+# checks make sound" changes every time a check is added. A check run BY HAND is unaffected.
+get_property(_daw_all_tests DIRECTORY PROPERTY TESTS)
+set_tests_properties(${_daw_all_tests} PROPERTIES
+  ENVIRONMENT_MODIFICATION "DAW_SILENT_OUTPUT=set:1")
