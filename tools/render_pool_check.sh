@@ -166,7 +166,7 @@ render() {
   [ "$3" = "auto" ] || threadEnv="DAW_ENGINE_RENDER_THREADS=$3"
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/pool_$$_$2" \
       ${threadEnv} \
-      ./daw_engine --project "$1" --render "$2" --run-seconds 8 --block-size 256 \
+      ./daw_engine --project "$1" --render "$2" --sample-rate 44100 --run-seconds 8 --block-size 256 \
       >"$TMP/$2.log" 2>&1 ) || fail "the '$2' render exited non-zero — see $TMP/$2.log"
   [ -s "$TMP/$2.wav" ] || fail "the '$2' render wrote no output"
 }

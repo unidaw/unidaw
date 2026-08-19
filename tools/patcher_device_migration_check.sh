@@ -55,7 +55,7 @@ scenario() {
   # emitting silence to stay current, so there is no depth to tune and no starvation to mistake
   # for a dead generator.
   ( cd "$BUILD" && env DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$tmp" \
-      ./daw_engine --project "$name" --render "$(basename "$take" .wav)" --run-seconds 12 \
+      ./daw_engine --project "$name" --render "$(basename " --sample-rate 44100$take" .wav)" --run-seconds 12 \
       >"$tmp/engine.log" 2>&1 ) \
     || { echo "  FAIL: the '$name' render exited non-zero — see $tmp/engine.log"; return 1; }
   local ok=1

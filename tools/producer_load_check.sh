@@ -143,7 +143,7 @@ field() {
 sampler_us_of() {  # sampler_us_of <projectName> <tag>
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/pload_$$_$2" \
       DAW_ENGINE_RENDER_THREADS=1 \
-      ./daw_engine --project "$1" --render "$2" --run-seconds 8 --block-size 256 \
+      ./daw_engine --project "$1" --render "$2" --sample-rate 44100 --run-seconds 8 --block-size 256 \
       >"$TMP/$2.log" 2>&1 ) || return 1
   field "$TMP/$2.log" sampler_mean_us
 }
@@ -163,7 +163,7 @@ while [ "$N" -le "$MAXT" ]; do
   # improve — the shipping figure is measured separately below.
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/pload_$$_$N" \
       DAW_ENGINE_RENDER_THREADS=1 \
-      ./daw_engine --project "n$N" --render "n$N" --run-seconds 8 --block-size 256 \
+      ./daw_engine --project "n$N" --render "n$N" --sample-rate 44100 --run-seconds 8 --block-size 256 \
       >"$TMP/n$N.log" 2>&1 ) || fail "the $N-track render exited non-zero — see $TMP/n$N.log"
 
   LOADM="$(field "$TMP/n$N.log" load_milli)"
@@ -302,7 +302,7 @@ if [ -n "${SCALE_FAIL:-}" ]; then
   project "recheck" 1
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/pload_${$}_re" \
       DAW_ENGINE_RENDER_THREADS=1 \
-      ./daw_engine --project recheck --render recheck --run-seconds 8 --block-size 256 \
+      ./daw_engine --project recheck --render recheck --sample-rate 44100 --run-seconds 8 --block-size 256 \
       >"$TMP/recheck.log" 2>&1 ) || fail "the baseline re-measurement exited non-zero"
   BASE2="$(field "$TMP/recheck.log" sampler_mean_us)"
   [ -n "${BASE2:-}" ] || fail "the baseline re-measurement produced no telemetry"
@@ -332,7 +332,7 @@ fi
 # statement about the box rather than about the engine. tools/render_pool_check.sh is what holds
 # the pool to account, by proving the thread count cannot change the OUTPUT.
 ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/ppool_$$" \
-    ./daw_engine --project "n$MAXT" --render "pool" --run-seconds 8 --block-size 256 \
+    ./daw_engine --project "n$MAXT" --render "pool" --sample-rate 44100 --run-seconds 8 --block-size 256 \
     >"$TMP/pool.log" 2>&1 ) || fail "the pooled $MAXT-track render exited non-zero"
 POOLM="$(field "$TMP/pool.log" load_milli)"
 if [ -n "${POOLM:-}" ]; then

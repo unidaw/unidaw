@@ -236,7 +236,7 @@ PYL
 
 SHM2="/mmchk2_$$"
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --project long --render lout --run-seconds 120 >"$TMP/render.log" 2>&1 ) &
+    ./daw_engine --project long --render lout --sample-rate 44100 --run-seconds 120 >"$TMP/render.log" 2>&1 ) &
 ENG=$!
 cli2() { env DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 LIVEPEAK=""

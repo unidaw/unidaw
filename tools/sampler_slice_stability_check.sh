@@ -123,7 +123,7 @@ PY
 
 render() {
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/slchk_$$_$1" \
-      ./daw_engine --project "$1" --render "$1" --run-seconds 8 --block-size 256 \
+      ./daw_engine --project "$1" --render "$1" --sample-rate 44100 --run-seconds 8 --block-size 256 \
       >"$TMP/$1.log" 2>&1 ) || fail "the '$1' render exited non-zero — see $TMP/$1.log"
   [ -s "$TMP/$1.wav" ] || fail "the '$1' render wrote no output"
 }

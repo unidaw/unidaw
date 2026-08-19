@@ -110,7 +110,7 @@ PY
   [ $? -eq 0 ] || fail "could not write the fixture for ${SRC}->${DST}"
 
   ( cd "$BUILD" && env DAW_UI_SHM_NAME="/rdet_${SRC}${DST}_$$" DAW_PROJECT_DIR="$TMP" \
-      ./daw_engine --project "det${SRC}${DST}" --render "out${SRC}${DST}" --run-seconds 3 \
+      ./daw_engine --project "det${SRC}${DST}" --render "out${SRC}${DST}" --sample-rate 44100 --run-seconds 3 \
       --block-size "$BLOCK" > "$TMP/eng${SRC}${DST}.log" 2>&1 ) \
     || fail "the render exited non-zero for ${SRC}->${DST} — see $TMP/eng${SRC}${DST}.log"
   [ -s "$TMP/out${SRC}${DST}.wav" ] || fail "the render wrote no output for ${SRC}->${DST}"

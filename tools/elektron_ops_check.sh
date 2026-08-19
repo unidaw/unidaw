@@ -235,7 +235,7 @@ PY
 render() {  # render <project> <name> [blockSize]
   local bs="${3:-256}"
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/elek_${$}_$2" \
-      ./daw_engine --project "$1" --render "$2" --run-seconds 9 --block-size "$bs" \
+      ./daw_engine --project "$1" --render "$2" --sample-rate 44100 --run-seconds 9 --block-size "$bs" \
       >"$TMP/$2.log" 2>&1 ) || fail "the '$2' render exited non-zero — see $TMP/$2.log"
   [ -s "$TMP/$2.wav" ] || fail "the '$2' render wrote no output"
 }

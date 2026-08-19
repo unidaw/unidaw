@@ -62,7 +62,7 @@ python3 "$TMP/gen.py" "$TMP/t.uniproj.json" "$TMP" "$TRACKS"
 echo "== rendering $TRACKS tracks under TSan"
 ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/tsan_$$" \
     TSAN_OPTIONS="halt_on_error=0" \
-    ./daw_engine --project t --render t --run-seconds 6 --block-size 256 \
+    ./daw_engine --project t --render t --sample-rate 44100 --run-seconds 6 --block-size 256 \
     >"$TMP/tsan.log" 2>&1 )
 
 REPORT="$ROOT/build-tsan/tsan-report.txt"

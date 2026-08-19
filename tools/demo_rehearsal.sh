@@ -551,7 +551,7 @@ if [ -f "$TMP/rehearsal.uniproj.json" ]; then
       DAW_HOST_BINARY="$HOST" DAW_PLUGIN_CACHE="$PLUGIN_CACHE" \
       DAW_PATCHER_PRESET_DIR="$PATCHER_PRESETS" \
       "$ENGINE" --project rehearsal \
-      --render "$TMP/take" --run-seconds 12 ) >"$TMP/render.log" 2>&1
+      --render "$TMP/take" --sample-rate 44100 --run-seconds 12 ) >"$TMP/render.log" 2>&1
   PEAK="$(python3 - "$TMP/take.wav" <<'PYR' 2>/dev/null
 import wave, struct, sys
 try:

@@ -330,9 +330,9 @@ print('%.8f' % (math.sqrt(sum(float(x) * x for x in s) / len(s)) / 32768.0 if s 
 " "$1" "$2" "$3" 2>/dev/null
 }
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="${SHM}_r1" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --project ac --render loud --run-seconds 6 >"$TMP/r1.log" 2>&1 )
+    ./daw_engine --project ac --render loud --sample-rate 44100 --run-seconds 6 >"$TMP/r1.log" 2>&1 )
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="${SHM}_r2" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --project acquiet --render quiet --run-seconds 6 >"$TMP/r2.log" 2>&1 )
+    ./daw_engine --project acquiet --render quiet --sample-rate 44100 --run-seconds 6 >"$TMP/r2.log" 2>&1 )
 [ -s "$TMP/loud.wav" ] || fail "the reference render produced nothing — see $TMP/r1.log"
 [ -s "$TMP/quiet.wav" ] || fail "the edited render produced nothing — see $TMP/r2.log"
 # 120 bpm, so a bar is two seconds: clip 7 spans 0..2 and clip 9 spans 2..4.

@@ -223,7 +223,7 @@ json.dump({"schema_version": 4, "meta": {"name": "p"}, "nanoticks_per_quarter": 
 PY
 
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="/chopplay_$$" DAW_PROJECT_DIR="$TMP/projects" \
-    ./daw_engine --project p --render first --run-seconds 5 --block-size 256 \
+    ./daw_engine --project p --render first --sample-rate 44100 --run-seconds 5 --block-size 256 \
     >"$TMP/projects/play.log" 2>&1 ) || fail "the render exited non-zero — see $TMP/projects/play.log"
 [ -s "$TMP/projects/first.wav" ] || fail "the render wrote no output"
 

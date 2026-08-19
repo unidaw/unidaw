@@ -159,7 +159,7 @@ json.dump({"schema_version": 4, "meta": {"name": "pat"}, "nanoticks_per_quarter"
 PY
 
 ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/patsam_$$" \
-    ./daw_engine --project pat --render pat --run-seconds 5 --block-size 256 \
+    ./daw_engine --project pat --render pat --sample-rate 44100 --run-seconds 5 --block-size 256 \
     >"$TMP/eng.log" 2>&1 ) || fail "the render exited non-zero — see $TMP/eng.log"
 [ -s "$TMP/pat.wav" ] || fail "the render wrote no output"
 
@@ -227,7 +227,7 @@ if not done:
 json.dump(d, open(sys.argv[2], "w"))
 PYN
 ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/patnarrow_$$" \
-    ./daw_engine --project narrow --render narrow --run-seconds 5 --block-size 256 \
+    ./daw_engine --project narrow --render narrow --sample-rate 44100 --run-seconds 5 --block-size 256 \
     >"$TMP/narrow.log" 2>&1 ) || fail "the narrow render exited non-zero — see $TMP/narrow.log"
 [ -s "$TMP/narrow.wav" ] || fail "the narrow render wrote no output"
 

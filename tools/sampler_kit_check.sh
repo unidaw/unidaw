@@ -241,7 +241,7 @@ PYS
 # ---- Now render three patterns and measure WHAT SOUNDED, by frequency.
 render() {  # render <projectName> <outName>
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/kitr_$$_$2" \
-      ./daw_engine --project "$1" --render "$2" --run-seconds 10 --block-size 256 \
+      ./daw_engine --project "$1" --render "$2" --sample-rate 44100 --run-seconds 10 --block-size 256 \
       >"$TMP/$2.log" 2>&1 ) || fail "the '$2' render exited non-zero — see $TMP/$2.log"
   [ -s "$TMP/$2.wav" ] || fail "the '$2' render wrote no output"
 }

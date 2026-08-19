@@ -3016,12 +3016,27 @@ mod command_outcome_tests {
     }
 
     fn read_only_handle() -> (EngineHandle, std::path::PathBuf) {
-        let nonce = SystemTime::now()
+        // UNIQUE BY CONSTRUCTION, NOT BY CLOCK. This used `SystemTime::now().as_nanos()` alone,
+        // and `create_new` below then panicked with "create fixture mapping" under load — three
+        // tests call this helper, cargo runs them as parallel THREADS of one process, so
+        // `process::id()` is identical for all of them and only the timestamp separated the paths.
+        // `as_nanos()` reports nanoseconds but does not resolve them: measured on this machine, 200
+        // rapid samples yielded 14 distinct values, 186 of them equal to the previous one. Two
+        // threads inside the same microsecond therefore built the same path and the second failed.
+        //
+        // It only ever failed beside other work — the suite runs ctest -j2, and thread bursts under
+        // contention are what puts two calls inside one tick. A counter has none of that: it is
+        // unique per process regardless of what the clock can resolve, and the timestamp stays only
+        // so a leftover file is attributable to a run.
+        static FIXTURE_SEQ: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let seq = FIXTURE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "daw-command-outcome-readonly-{}-{nonce}",
+            "daw-command-outcome-readonly-{}-{stamp}-{seq}",
             std::process::id()
         ));
         let file = OpenOptions::new()

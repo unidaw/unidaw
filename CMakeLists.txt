@@ -2009,6 +2009,15 @@ add_test(NAME host_index_walk
   COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/architecture/host_index_walk_check.py
 )
 set_tests_properties(host_index_walk PROPERTIES TIMEOUT 60)
+# AN OFFLINE RENDER MUST STATE ITS SAMPLE RATE. The engine opens the default output device even when
+# rendering to a file, so an unpinned render produces different bytes depending on what was last
+# plugged in — sampler_vintage passed for weeks at 44100 and failed the first time a Bluetooth device
+# made the default 48000, with no commit involved and the engine correct. Six checks were pinned after
+# that; forty-two were not, which is a rule applied where the pain was felt instead of to the class.
+add_test(NAME render_rate_pinned
+  COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/architecture/render_rate_pinned_check.py
+)
+set_tests_properties(render_rate_pinned PROPERTIES TIMEOUT 60)
 
 set_tests_properties(inbound_audio PROPERTIES TIMEOUT 60)
 # The control that would have caught the laundering: a legacy manifest whose embedded pair does

@@ -170,7 +170,7 @@ shape() {
   kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
   [ -f "$TMP/$name.uniproj.json" ] || fail "'$name' produced no saved project"
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/envrnd_$$_$name" \
-      ./daw_engine --project "$name" --render "$name" --run-seconds 6 --block-size 256 \
+      ./daw_engine --project "$name" --render "$name" --sample-rate 44100 --run-seconds 6 --block-size 256 \
       >"$TMP/$name.render.log" 2>&1 ) || fail "the '$name' render exited non-zero"
   [ -s "$TMP/$name.wav" ] || fail "the '$name' render wrote no output"
 }
@@ -338,7 +338,7 @@ lfoShape() {  # like shape(), but sends sampler-lfo
   after_command "$TMP" env DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do save "$name" --force || true
   kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/lforn_$$_$name" \
-      ./daw_engine --project "$name" --render "$name" --run-seconds 6 --block-size 256 \
+      ./daw_engine --project "$name" --render "$name" --sample-rate 44100 --run-seconds 6 --block-size 256 \
       >"$TMP/$name.render.log" 2>&1 ) || fail "the '$name' render exited non-zero"
   [ -s "$TMP/$name.wav" ] || fail "the '$name' render wrote no output"
 }

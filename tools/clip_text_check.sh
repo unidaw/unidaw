@@ -135,7 +135,7 @@ json.dump({"schema_version": 4, "meta": {"name": "ct"}, "nanoticks_per_quarter":
 PY
 
 # The BASELINE render, before any edit — the control the HEARD and INTACT properties compare to.
-( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" ./daw_engine --project ct --render base \
+( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" ./daw_engine --project ct --render base --sample-rate 44100 \
     --run-seconds 3 >"$TMP/base.log" 2>&1 )
 [ -s "$TMP/base.wav" ] || fail "the baseline render produced no file — every audio assertion below
         would be comparing nothing to nothing (see $TMP/base.log)"
@@ -289,7 +289,7 @@ say refok "refused: no_such_clip, not_an_audio_clip, text_too_long, source_unrea
 # see it is to render again after the refusal rather than to re-read the field.
 cli do save ct_refused >/dev/null 2>&1
 sleep 1
-( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" ./daw_engine --project ct_refused --render refused \
+( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" ./daw_engine --project ct_refused --render refused --sample-rate 44100 \
     --run-seconds 3 >"$TMP/refused.log" 2>&1 )
 intactok=1
 REF="$(dominant "$TMP/refused.wav" 2>/dev/null || echo "0 0.000")"
@@ -329,7 +329,7 @@ say joinok "join: clip 7 moved ${B0%% *} -> ${B1%% *} and that source is publish
 
 cli do save ct_rt >/dev/null 2>&1
 sleep 1
-( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" ./daw_engine --project ct_rt --render after \
+( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" ./daw_engine --project ct_rt --render after --sample-rate 44100 \
     --run-seconds 3 >"$TMP/after.log" 2>&1 )
 heardok=1
 AFTER="$(dominant "$TMP/after.wav" 2>/dev/null || echo "0 0.000")"

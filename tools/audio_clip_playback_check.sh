@@ -51,7 +51,7 @@ EOF
 # drop the beginning. The realtime pull path is covered by offline_render_check (which pins a
 # render against a device capture of the same fixture) and by the checks that stay on hardware.
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --project audioplay --render take --run-seconds 6 \
+    ./daw_engine --project audioplay --render take --sample-rate 44100 --run-seconds 6 \
     >"$TMP/engine.log" 2>&1 ) \
   || { echo "FAIL: the render exited non-zero — see $TMP/engine.log"; exit 1; }
 [ -s "$TAKE" ] || { echo "FAIL: the render wrote no output"; exit 1; }

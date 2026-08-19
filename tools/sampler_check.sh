@@ -116,7 +116,7 @@ render() {  # render <name> [blockSize]
   local extra=(--run-seconds 6)
   [ $# -ge 2 ] && extra+=(--block-size "$2")
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/smpchk_$$_$1" \
-      ./daw_engine --project "$1" --render "$1" "${extra[@]}" \
+      ./daw_engine --project "$1" --render "$1" --sample-rate 44100 "${extra[@]}" \
       >"$TMP/$1.log" 2>&1 ) \
     || fail "the '$1' render exited non-zero — see $TMP/$1.log"
   [ -s "$TMP/$1.wav" ] || fail "the '$1' render wrote no output"

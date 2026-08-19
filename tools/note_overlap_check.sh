@@ -268,7 +268,7 @@ kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 # — not a fixture hand-written to look like them.
 render() {  # render <name>
   ( cd "$BUILD" && env DAW_UI_SHM_NAME="/novr_${$}_$1" DAW_PROJECT_DIR="$TMP" \
-      ./daw_engine --project "$1" --render "$1" --run-seconds 5 --block-size 256 \
+      ./daw_engine --project "$1" --render "$1" --sample-rate 44100 --run-seconds 5 --block-size 256 \
       >"$TMP/$1.log" 2>&1 ) || fail "the '$1' render exited non-zero"
   [ -s "$TMP/$1.wav" ] || fail "the '$1' render wrote no output"
 }

@@ -96,7 +96,7 @@ run_capture() {  # $1=label  $2=take.wav  $3=extra engine env ("" or "DAW_DISABL
   # preview_note, level_match_bypass.
   ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" \
       DAW_PROJECT_DIR="$TMP" $extra \
-      ./daw_engine --project pdc --render "$(basename "$take" .wav)" --run-seconds 6 \
+      ./daw_engine --project pdc --render "$(basename " --sample-rate 44100$take" .wav)" --run-seconds 6 \
       >"$log" 2>&1 ) \
     || { echo "  FAIL: the '$label' render exited non-zero — see $log"; exit 1; }
   grep -o 'pdc.chain_latency[^)]*samples[^ )]*[0-9]*' "$log" | head -4 || true

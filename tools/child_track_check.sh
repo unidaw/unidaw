@@ -42,7 +42,7 @@ LOG="$TMP/eng.log"
 # checks that deliberately stay on hardware: audio_stability, sidechain, master_fx, panic,
 # preview_note, level_match_bypass.
 ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --project mo --render m --run-seconds 5 >"$LOG" 2>&1 ) \
+    ./daw_engine --project mo --render m --sample-rate 44100 --run-seconds 5 >"$LOG" 2>&1 ) \
   || { echo "FAIL: the render exited non-zero — see $LOG"; exit 1; }
 
 CHILDREN=$(grep -c "multiout.child_created" "$LOG" || true)

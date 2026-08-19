@@ -176,7 +176,7 @@ d["clips"][0]["chords"] = [{"chord_id": 1, "nanotick": 0, "duration": Q, "column
 json.dump(d, open(out, "w"))
 PYS
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="/chsnd_$$" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --project snd --render sndout --run-seconds 6 >"$TMP/snd.log" 2>&1 )
+    ./daw_engine --project snd --render sndout --sample-rate 44100 --run-seconds 6 >"$TMP/snd.log" 2>&1 )
 [ -s "$TMP/sndout.wav" ] || fail "the chord render produced no file at all — see $TMP/snd.log"
 python3 - "$TMP/sndout.wav" <<'PYA' || fail "a chord renders SILENT"
 import sys, wave, struct
@@ -209,7 +209,7 @@ d["clips"][0]["chords"] = [{"chord_id": 1, "nanotick": Q, "duration": Q, "column
 json.dump(d, open(out, "w"))
 PYT
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="/chstr_$$" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --project str --render strout --run-seconds 6 >"$TMP/str.log" 2>&1 )
+    ./daw_engine --project str --render strout --sample-rate 44100 --run-seconds 6 >"$TMP/str.log" 2>&1 )
 [ -s "$TMP/strout.wav" ] || fail "the strum render produced no file — see $TMP/str.log"
 python3 - "$TMP/strout.wav" <<'PYB' || fail "the strum is not the width that was asked for"
 import sys, wave, struct

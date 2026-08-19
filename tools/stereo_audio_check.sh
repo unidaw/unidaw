@@ -112,7 +112,7 @@ PY
 
 render() {  # render <project> -> <project>.wav
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/stchk_$$_$1" \
-      ./daw_engine --project "$1" --render "$1" --run-seconds 2 \
+      ./daw_engine --project "$1" --render "$1" --sample-rate 44100 --run-seconds 2 \
       >"$TMP/$1.log" 2>&1 ) \
     || fail "the '$1' render exited non-zero — see $TMP/$1.log"
   [ -s "$TMP/$1.wav" ] || fail "the '$1' render wrote no output"

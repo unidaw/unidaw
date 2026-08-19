@@ -112,7 +112,7 @@ make_project slowed  "[ { \"nanotick\": 0, \"bpm\": 120 }, { \"nanotick\": $BAR,
 # race and no `do play` to time.
 run() {  # run <name>
   ( cd "$BUILD" && env DAW_UI_SHM_NAME="/tmchk_${1}_$$" DAW_PROJECT_DIR="$TMP" \
-      ./daw_engine --project "$1" --render "$1" --run-seconds 8 \
+      ./daw_engine --project "$1" --render "$1" --sample-rate 44100 --run-seconds 8 \
       >"$TMP/$1.log" 2>&1 ) \
     || { echo "  FAIL: the '$1' render exited non-zero — see $TMP/$1.log"; exit 1; }
   [ -s "$TMP/$1.wav" ] || { echo "  FAIL: the '$1' render wrote no output"; exit 1; }

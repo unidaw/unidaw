@@ -157,7 +157,7 @@ PY
 CRASHED=0
 for round in $(seq 1 "$ROUNDS"); do
   export DAW_UI_SHM_NAME="/edplay_${$}_$round" DAW_PROJECT_DIR="$TMP"
-  ( cd "$BUILD" && ./daw_engine --project e --render "take$round" --run-seconds 10 \
+  ( cd "$BUILD" && ./daw_engine --project e --render "take$round" --sample-rate 44100 --run-seconds 10 \
       --block-size 256 >"$TMP/r$round.log" 2>&1 ) &
   ENG=$!
   for _ in $(seq 1 120); do

@@ -153,7 +153,7 @@ PY
 
 render() {  # render <outName> <blockSize>
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/detchk_$$_$1" \
-      ./daw_engine --project det --render "$1" --run-seconds 8 --block-size "$2" \
+      ./daw_engine --project det --render "$1" --sample-rate 44100 --run-seconds 8 --block-size "$2" \
       >"$TMP/$1.log" 2>&1 ) \
     || fail "the $2-frame render exited non-zero — see $TMP/$1.log"
   [ -s "$TMP/$1.wav" ] || fail "the $2-frame render wrote no output"

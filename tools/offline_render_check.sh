@@ -106,7 +106,7 @@ SECS=4
 render() {  # $1 = output name
   ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_PROJECT_DIR="$TMP" \
       DAW_UI_SHM_NAME="/offrend_$$_$1" \
-      ./daw_engine --project rend --render "$1" --run-seconds "$SECS" \
+      ./daw_engine --project rend --render "$1" --sample-rate 44100 --run-seconds "$SECS" \
       >"$TMP/$1.log" 2>&1 )
 }
 

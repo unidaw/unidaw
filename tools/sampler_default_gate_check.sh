@@ -208,7 +208,7 @@ PYC
 # ---- AUDIBLE + CONTRAST. gate is the field that decides whether note-off cuts the voice, so a
 # default that saves and never reaches the voice must fail here.
 ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/defgate_r_$$" \
-    ./daw_engine --project out --render take --run-seconds 9 --block-size 256 \
+    ./daw_engine --project out --render take --sample-rate 44100 --run-seconds 9 --block-size 256 \
     >"$TMP/render.log" 2>&1 ) || fail "the render exited non-zero — see $TMP/render.log"
 
 peak() {  # peak <fromSec> <toSec>

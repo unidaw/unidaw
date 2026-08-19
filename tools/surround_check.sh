@@ -49,7 +49,7 @@ run() {  # $1=name  -> prints "ch0 ch1 ch2 ch3 ch4 ch5" peaks
   # preview_note, level_match_bypass.
   ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_MASTER_CHANNELS=6 DAW_UI_SHM_NAME="$SHM" \
       DAW_PROJECT_DIR="$TMP" \
-      ./daw_engine --project "$name" --render "$name" --run-seconds 5 \
+      ./daw_engine --project "$name" --render "$name" --sample-rate 44100 --run-seconds 5 \
       >"$TMP/$name.log" 2>&1 ) \
     || { echo "  FAIL: the '$name' render exited non-zero"; exit 1; }
   python3 - "$TMP/$name.wav" <<'PY'

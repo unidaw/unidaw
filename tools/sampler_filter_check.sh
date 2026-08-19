@@ -268,7 +268,7 @@ json.dump({"schema_version": 4, "meta": {"name": sys.argv[1]}, "nanoticks_per_qu
            "tracks": [tr]}, open(out, "w"))
 PYP
   ( cd "$BUILD" && env DAW_UI_SHM_NAME="/filtchk_${$}_$1" DAW_PROJECT_DIR="$TMP/projects" \
-      ./daw_engine --project "$1" --render "$1" --run-seconds 5 --block-size 256 \
+      ./daw_engine --project "$1" --render "$1" --sample-rate 44100 --run-seconds 5 --block-size 256 \
       >"$TMP/projects/$1.log" 2>&1 ) || fail "the '$1' render exited non-zero"
   [ -s "$TMP/projects/$1.wav" ] || fail "the '$1' render wrote no output"
 }

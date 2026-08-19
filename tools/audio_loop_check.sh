@@ -110,7 +110,7 @@ EOF
 # is. A render has no ring, no start transient, and no dropouts to mistake for a missed retrigger.
 START=$SECONDS
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --project al --render out --run-seconds 24 \
+    ./daw_engine --project al --render out --sample-rate 44100 --run-seconds 24 \
     >"$TMP/engine.log" 2>&1 ) \
   || { echo "  FAIL: the render exited non-zero — see $TMP/engine.log"; exit 1; }
 [ -s "$TMP/out.wav" ] || { echo "  FAIL: the render wrote no output"; exit 1; }

@@ -176,7 +176,7 @@ PY
 
 render() {  # render <projectName> <renderName>
   ( cd "$BUILD" && env DAW_UI_SHM_NAME="/pscope_${$}_$2" DAW_PROJECT_DIR="$TMP" \
-      ./daw_engine --project "$1" --render "$2" --run-seconds 5 --block-size 256 \
+      ./daw_engine --project "$1" --render "$2" --sample-rate 44100 --run-seconds 5 --block-size 256 \
       >"$TMP/$2.log" 2>&1 ) || fail "the '$2' render exited non-zero — see $TMP/$2.log"
   [ -s "$TMP/$2.wav" ] || fail "the '$2' render wrote no output"
   grep -qE '"event":"project.patcher_(loaded|assembled)"' "$TMP/$2.log" || \
