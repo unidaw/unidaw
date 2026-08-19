@@ -7173,3 +7173,69 @@ into `NotHosted` — each fail the test, with the firing assertion naming the de
 changed once.** Inserting it went wrong first — it landed between `template<...>` and its function,
 which is the third time this session an anchor was chosen for uniqueness rather than for meaning.
 The compiler caught this one; the two before it were caught by reading.
+
+### "The rule is now single-homed" was false — it converted 2 of 13
+
+Independent review refuted the headline claim of the previous entry, and measuring the tree by
+construct confirmed it and found one site more than the review did. **Thirteen places derive a plugin
+host index by walking a device chain with a counter.** The extraction converted two.
+
+That is the same failure this ledger records as *certifying a class closed*: the strongest sentence
+in the summary was the false one, and it was false by a factor of six.
+
+**Four of the unconverted walks are wrong today**, and the clearest was verified by hand rather than
+taken from the report: `applyHostBypassStates` increments its index for every VST-*kind* device while
+`rebuildHostForChain` omits devices whose plugin does not resolve. So with an unresolvable effect
+ahead of a real one, bypassing the missing device sends bypass to host slot 0 — **the real plugin** —
+and bypassing the real one addresses a slot off the end and is dropped. `device_chain.h` argues at
+length that bypass must not filter slots *because* `sendSetBypass` "needs the index of a device it is
+about to bypass": it reasoned about this exact call site without checking that the call site computed
+the index by a different rule.
+
+The others: plugin state captured and restored from the wrong slot, meters attributed to the wrong
+device, and — in the same file, 110 lines above the loop that was converted — a chain snapshot
+requesting the second plugin's bus layout under the first plugin's id, under a comment claiming it is
+"the same walk the param read-back uses, so it stays aligned."
+
+### The fix is a guard on the shape, not thirteen conversions
+
+Thirteen hand conversions leave the fourteenth to be written next month — which is precisely what
+happened after the last time this shape was found and written down here. `hostIndexOf` is now the one
+place a device becomes a slot number, and `host_index_walk_check` fails when a new hand-rolled walk
+appears. The owed list may only shrink, and a *stale* entry fails it too: a site recorded as owed
+that no longer has a walk would otherwise license a new walk in the same file.
+
+**The check is declared a ratchet, not a census, in its own docstring.** It can say no new walk
+appeared; it cannot say none exists. That distinction is the difference between a guard and a claim.
+
+### The check earned its keep on its first run, for the wrong reason
+
+It flagged `engine_load_project.cpp`, which my own enumeration had seen and dismissed as "a `for` over
+a vector, a different thing." **I was one step from tightening the pattern to silence it.** The site
+is real: `vstIds` builds an ordered list of VST-*kind* ids with no resolvability test, and the loop
+indexes it as a host slot — so restored plugin state lands on the wrong plugin whenever anything
+ahead of it is missing.
+
+**A hit matched for the wrong reason still has to be read before it is dismissed.** The predicate is
+a name-and-increment heuristic that both over- and under-matches, and the docstring now says so with
+this run as the example, rather than implying a structural detector.
+
+### Five defects in what I had just built
+
+- **The documented invariant was a comment, not a guarantee.** `path` is non-empty whenever the
+  device occupies — except a resolver returning an engaged-but-empty optional gave `{Occupies, ""}`,
+  reachable from a real plugin-cache entry. The incoming validator *refuses* that combination, so the
+  rule would have built plans its own checker rejects on input the live host accepts.
+- **A negative control survived it.** The hole was fixed and no test covered the fix; NC-4 proved it,
+  which is why the controls are run after fixing and not only before.
+- **The test asserted the inverse of production.** It said a Direct path that is not on disk comes
+  back unresolved "rather than silently loading the engine's default plugin" — and the real resolver
+  returns the default for a Direct index. The test claimed the header's own hazard cannot happen.
+- **`assignHostSlotOccupancy` had zero production callers** while the header claimed it closed the
+  index hazard, and the CMake comment claimed the extraction made the compact-index case testable
+  when two existing suites already covered it. Both narrowed to what is true.
+- **A fixed temp filename** would have made two concurrent runs fail each other at random.
+
+And `isHostedDeviceKind` turned out to be the *third* copy of its predicate, not the first —
+`isHostedKind` and `isHostedDevice` already existed, differing only in signature. All three are now
+one overload pair. **A guard against duplication that is itself a duplicate is worth noticing.**
