@@ -7269,3 +7269,34 @@ That reframes the remaining work:
 `hostIndexOf` and the walk ratchet stay: they give the rule one home and stop a fourteenth appearing
 while the authority moves. But they are the floor, not the fix — the derivation is what the recorded
 mapping replaces, and the ratchet's owed list is the list of sites that migration must empty.
+
+### Two ratchets caught the fix, and one of them told me what to do
+
+The suite came back with two failures, both caused by the bypass fix, and both worth recording
+because neither is a defect in the fix.
+
+**`progress_doc`: main() grew past its ceiling.** Converting `applyHostBypassStates` to the shared
+rule added lines to a lambda that lives inside `main()`, pushing it from 1909 to 1931 against a
+ceiling of 1923. The check does not merely report this — it says what to do: *"Move logic OUT of
+main() rather than raising the ceiling."* So the body moved to `engine_chain_host.cpp`, beside
+`rebuildHostForChain`, which is the function whose slot numbering it has to agree with and which
+`ChainHostDeps` already named it next to. Twenty-eight lines in `main()` became six.
+
+**That is a better outcome than the fix I set out to make**, and I would not have made it
+unprompted: the lambda was already there, already worked, and I was only changing four lines inside
+it. A ceiling that names the remedy converts an annoyance into a design decision.
+
+**Then it asked to be tightened.** Passing at 1909 against 1923, it printed `main() is 1909 lines, 14
+under the ceiling — lower it`. Leaving the slack is exactly how its own history says the number
+drifted before — *"an equality check on a hand-updated field let it grow by 13 lines unnoticed."* A
+ratchet with 14 lines of headroom is not a ratchet for those 14 lines, so the ceiling is now 1909.
+
+**`snapshot_publishers`: the evidence artifact pins line numbers**, and every edit above a publication
+moves them. Regenerated. This is the third time this artifact has failed for that reason in this
+effort, which is itself a signal: an evidence file keyed by line number is a file that fails for
+reasons unrelated to its subject. It is not wrong to pin them — the pin is what makes the inventory
+checkable — but the failure mode should be distinguishable from a real change in the population, and
+right now it is not.
+
+`docs/PROGRESS.md` was also at its staleness limit (12 commits behind, limit 12), so the next commit
+would have failed it regardless of this work.
