@@ -7239,3 +7239,33 @@ this run as the example, rather than implying a structural detector.
 And `isHostedDeviceKind` turned out to be the *third* copy of its predicate, not the first —
 `isHostedKind` and `isHostedDevice` already existed, differing only in signature. All three are now
 one overload pair. **A guard against duplication that is itself a duplicate is worth noticing.**
+
+### Why there were thirteen walks: the mapping was computed and discarded
+
+Planning the conversion of the four broken sites turned up the actual cause, and it is not
+carelessness. **None of the four has `resolveDevicePluginPath` in scope.** They hand-rolled a
+kind-only walk because the correct rule was not reachable from where they stand — so the fix is not
+to thread a resolver into four more files.
+
+`rebuildHostForChain` stores what it built: `runtime.config.pluginPaths` and `pluginNames`, in host
+slot order. **It does not store which DEVICE each slot is.** The one function that knows the mapping
+exactly — because it just constructed it — discards the half every consumer needs, and thirteen sites
+then reconstruct it from the chain plus a resolver plus the filesystem.
+
+That reframes the remaining work:
+
+- Deriving the mapping is **strictly worse than recording it**, and not only for duplication. A
+  derivation answers "which slot *should* this device have"; the consumers need "which slot does it
+  *have*". Those differ whenever the chain has changed since the last successful reconcile — exactly
+  the case where a wrong answer sends a parameter to another plugin.
+- So the fix is to record `{path, name, deviceId}` together at the moment the host is built, and let
+  every consumer read the mapping the host was **actually built with**. No resolver, no filesystem,
+  no walk.
+- That is R-HOST-PLAN-AUTHORITY, and it is what `TrackPlan`'s host segments exist to carry. **The
+  thirteen walks are the symptom the record was written about**, which is worth stating plainly: this
+  was not found by reading the record and looking for work, it was found by trying to build a
+  conversion and discovering the input did not exist.
+
+`hostIndexOf` and the walk ratchet stay: they give the rule one home and stop a fourteenth appearing
+while the authority moves. But they are the floor, not the fix — the derivation is what the recorded
+mapping replaces, and the ratchet's owed list is the list of sites that migration must empty.
