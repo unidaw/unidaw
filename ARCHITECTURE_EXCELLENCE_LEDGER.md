@@ -7494,3 +7494,26 @@ by reintroducing exactly that in a file already converted.
 
 **A check that fires on the cure is not merely noisy; it is an argument for undoing the cure.** Owed
 is 7, down from 13.
+
+### The comment that claimed alignment was the one that was misaligned
+
+`emitChainSnapshot` derived its host slot by counting resolvable VST devices, under a comment saying
+it was *"the same walk the param read-back uses, so it stays aligned."* It was not. It omitted the
+Direct-with-a-real-path case, so a chain whose first plugin loads by path off disk gave that device
+`resolves=false`, never advanced the counter, and asked for the **second** plugin's bus layout under
+the **first** plugin's id — the UI drawing one plugin's bus topology against another's device.
+
+**A comment asserting that two things agree is worth less than nothing when they do not**, because it
+is exactly what stops the next reader checking. This one sat 110 lines above the loop converted in the
+previous commit, in the same file.
+
+It now reads the recorded mapping, and `-Werror=unused-variable` confirmed the derivation was fully
+gone rather than merely bypassed: the function's `resolveDevicePluginPath` binding became dead, so
+`emitChainSnapshot` no longer needs the plugin scan or the filesystem at all. **The compiler naming a
+now-unused dependency is the cheapest available proof that a rule was removed and not just
+short-circuited.**
+
+The liveness test `hostIndex > 0` — "at least one device resolved to a live host" — became
+`!hostSlotDevices.empty()`. Same question, asked of the record rather than of a re-derivation.
+
+Five sites converted, six owed.
