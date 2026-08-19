@@ -1191,23 +1191,27 @@ void runConsumerThread(ConsumerDeps& deps) {
             if (!ts) {
               continue;
             }
-            uint32_t hostIndex = 0;
-            for (const auto& device : ts->chainDevices) {
-              if (device.kind != daw::DeviceKind::VstInstrument &&
-                  device.kind != daw::DeviceKind::VstEffect) {
-                continue;
+            // THE HOST'S SLOTS, READ RATHER THAN REBUILT. This walked the snapshot's chain with a KIND-ONLY
+            // filter to "recover each meter's device id", and rebuildHostForChain omits any device whose
+            // plugin does not resolve — so one missing plugin shifted every later meter onto the wrong
+            // device, and the UI showed a plugin's levels under another plugin's name.
+            //
+            // hostSlotDevices IS the recovery this was attempting: index is the slot the meter came from,
+            // value is the device it belongs to.
+            {
+              std::lock_guard<std::mutex> lock(rt->controllerMutex);
+              for (size_t hostIndex = 0; hostIndex < rt->hostSlotDevices.size(); ++hostIndex) {
+                if (hostIndex >= daw::kUiMaxMeteredDevices) {
+                  break;
+                }
+                const int16_t* m = hostHeader->hostDeviceMeters[hostIndex];
+                auto& out = meterRegion->meters[slot][hostIndex];
+                out.inPeakMb = m[0];
+                out.outPeakMb = m[1];
+                out.inRmsMb = m[2];
+                out.outRmsMb = m[3];
+                out.deviceId = rt->hostSlotDevices[hostIndex];
               }
-              if (hostIndex >= daw::kUiMaxMeteredDevices) {
-                break;
-              }
-              const int16_t* m = hostHeader->hostDeviceMeters[hostIndex];
-              auto& out = meterRegion->meters[slot][hostIndex];
-              out.inPeakMb = m[0];
-              out.outPeakMb = m[1];
-              out.inRmsMb = m[2];
-              out.outRmsMb = m[3];
-              out.deviceId = device.id;
-              ++hostIndex;
             }
           }
           ++meterRegion->version;

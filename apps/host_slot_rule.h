@@ -126,4 +126,30 @@ std::optional<uint32_t> hostIndexOf(const std::vector<Device>& devices, ResolveP
   return found;
 }
 
+
+// WHERE A DEVICE ANSWERS IN ITS TRACK'S RUNNING HOST — the recorded answer, not a derived one.
+//
+// This is what the thirteen hand-rolled walks were reaching for and could not have. `hostIndexOf`
+// above derives the mapping from a chain plus a resolver plus the filesystem, which answers "which
+// slot SHOULD this device hold". A consumer about to send a bypass, read back a parameter, capture
+// plugin state or attribute a meter needs "which slot DOES it hold" — the slot the host was actually
+// built with. Those differ whenever the chain has changed since the last successful reconcile.
+//
+// The caller must hold the runtime's controllerMutex, which every one of those consumers already
+// takes to talk to the controller.
+//
+// NOTHING, NOT A SENTINEL, for a device the host is not holding. The render path already established
+// that an all-target sentinel here is "a SILENT WIDENING" that broadcasts one device's automation to
+// every plugin on the track; the same answer is right for every other consumer.
+template <typename Runtime>
+std::optional<uint32_t> recordedHostIndexOf(const Runtime& runtime, uint32_t stableDeviceId) {
+  const auto& slots = runtime.hostSlotDevices;
+  for (size_t i = 0; i < slots.size(); ++i) {
+    if (slots[i] == stableDeviceId) {
+      return static_cast<uint32_t>(i);
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace daw

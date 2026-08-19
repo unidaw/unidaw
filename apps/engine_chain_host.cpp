@@ -192,6 +192,7 @@ void rebuildHostForChain(ChainHostDeps& deps, TrackRuntime& runtime) {
     }
     std::vector<std::string> pluginPaths;
     std::vector<std::string> pluginNames;
+    std::vector<uint32_t> slotDevices;
     bool hasSidechainSource = false;
     uint32_t auxOutMask = 0;
     {
@@ -231,6 +232,9 @@ void rebuildHostForChain(ChainHostDeps& deps, TrackRuntime& runtime) {
         // The project's intended plugin name selects the right one out of a
         // multi-plugin bundle host-side (Zebra2.vst3 holds several).
         pluginNames.push_back(device.vstRef.name);
+        // AND WHICH DEVICE THIS SLOT IS. Free here — the walk already knows — and it is the fact
+        // thirteen other sites were reconstructing because this loop discarded it.
+        slotDevices.push_back(device.id);
       }
     }
     // Movement 4: bit 0 keys the first plugin's sidechain when a source is bound. A
@@ -238,6 +242,22 @@ void rebuildHostForChain(ChainHostDeps& deps, TrackRuntime& runtime) {
     // sidechain re-prepares the plugin with its key bus enabled.
     const uint32_t sidechainMask =
         (hasSidechainSource && !pluginPaths.empty()) ? 1u : 0u;
+    // THE MAPPING IS RECORDED EVERY TIME, ABOVE THE CHANGE GUARD, and the placement is the point.
+    //
+    // The guard below fires only when the PATHS or NAMES differ, because that is what the host cares
+    // about. The device-to-slot mapping can change while both stay identical: remove a device and add
+    // another loading the same plugin, and pluginPaths compares equal while every slot now belongs to
+    // a different device. Recording this inside the guard would leave the mapping describing the
+    // previous chain — which is precisely the stale-derivation failure this field exists to end, just
+    // relocated into the field itself.
+    //
+    // It is engine-side bookkeeping, not host state, so writing it always costs nothing: the host is
+    // reconciled on paths and names alone, exactly as before.
+    {
+      std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+      runtime.hostSlotDevices = slotDevices;
+    }
+    
     // Compare names too: swapping to another plugin in the SAME bundle keeps the
     // path but changes the name, and that still needs a reconcile.
     if (runtime.config.pluginPaths != pluginPaths ||

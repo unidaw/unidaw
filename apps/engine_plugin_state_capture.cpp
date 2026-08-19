@@ -39,20 +39,22 @@ struct HostedDevice {
 };
 
 std::vector<HostedDevice> hostedDevices(TrackRuntime* runtime) {
-  std::vector<daw::Device> devices;
-  {
-    std::lock_guard<std::mutex> lock(runtime->trackMutex);
-    devices = runtime->track.chain.devices;
-  }
+  // THE MAPPING THE HOST WAS BUILT WITH, read rather than rebuilt.
+  //
+  // This walked the chain with a KIND-ONLY filter and numbered the plugins as it went, which is not
+  // the numbering the host uses: rebuildHostForChain omits any device whose plugin does not resolve,
+  // so one unresolvable VST earlier in the chain shifted every later plugin's captured state onto
+  // the wrong plugin. Silently — a restored session simply had the wrong settings in it.
+  //
+  // runtime->hostSlotDevices IS this list: index is the host slot, value is the device. There is
+  // nothing left to compute.
   std::vector<HostedDevice> out;
-  uint32_t hostIndex = 0;
-  for (const auto& device : devices) {
-    if (device.kind != daw::DeviceKind::VstInstrument &&
-        device.kind != daw::DeviceKind::VstEffect) {
-      continue;
+  {
+    std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+    out.reserve(runtime->hostSlotDevices.size());
+    for (size_t i = 0; i < runtime->hostSlotDevices.size(); ++i) {
+      out.push_back({runtime->hostSlotDevices[i], static_cast<uint32_t>(i)});
     }
-    out.push_back({device.id, hostIndex});
-    ++hostIndex;
   }
   return out;
 }

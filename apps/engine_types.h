@@ -490,7 +490,24 @@ struct TrackRuntime {
   // (R-ROUTING-AUTHORITY) lives in the type rather than here: it owns the two slots, the
   // only place a slot is chosen, and the stamp that makes a delivery readable by exactly
   // the block it was addressed to. See apps/inbound_audio.h.
-  InboundAudio inboundAudio;
+  // WHICH DEVICE ANSWERS TO EACH HOST SLOT, recorded when the host is built rather than derived
+    // afterwards. Index IS the host slot; the value is the device's stable id.
+    //
+    // rebuildHostForChain computes this exactly, because it is the walk that decides which devices
+    // get sent to the host at all — and it used to throw the ids away, keeping only the paths. So
+    // thirteen sites across the engine rebuilt the mapping from the chain plus a plugin resolver
+    // plus the filesystem, and four of them rebuilt it WRONGLY: a bypass addressed to another
+    // plugin, plugin state saved and restored from the wrong slot, meters on the wrong device.
+    //
+    // A DERIVATION AND THIS ARE NOT THE SAME ANSWER. A derivation says which slot a device SHOULD
+    // hold; every one of those consumers needs the slot it DOES hold. They differ exactly when the
+    // chain has changed since the last successful reconcile — the moment a wrong answer sends a
+    // parameter into a different plugin.
+    //
+    // Guarded by controllerMutex, the same lock the host config it belongs to is written under, and
+    // written in the same statement group so the two cannot describe different chains.
+    std::vector<uint32_t> hostSlotDevices;
+    InboundAudio inboundAudio;
   std::vector<float> inputAudioBuffer;
   std::vector<float*> inputAudioChannels;
   // Movement 4 sidechain: the key signal pulled from the source track's output this

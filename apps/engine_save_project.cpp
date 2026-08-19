@@ -2,6 +2,7 @@
 // bound below carry the names the lambda captured, so nested lambdas and shadowing still
 // mean what they meant, and the only claim this makes is "the same code, somewhere else".
 #include "apps/engine_save_project.h"
+#include "apps/host_slot_rule.h"
 #include "apps/sha256.h"
 #include "apps/engine_artifact_commit.h"
 #include "apps/artifact_inventory.h"
@@ -517,11 +518,28 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
       // the document says is there, and re-reading the live chain here would let the two disagree
       // in the window between the capture above and this loop.
       const std::vector<daw::Device>& devices = documentTrack.chain.devices;
-      uint32_t hostIndex = 0;
       for (const auto& device : devices) {
-        if (device.kind != daw::DeviceKind::VstInstrument &&
-            device.kind != daw::DeviceKind::VstEffect) {
+        // NOT A PLUGIN AT ALL — skipped exactly as the kind guard here always did.
+        if (!daw::isHostedDeviceKind(device)) {
           continue;
+        }
+        // WHICH HOST SLOT THIS DEVICE ANSWERS TO — the recorded one, not a count of the loop.
+        //
+        // This numbered plugins as it walked, filtering on KIND alone, and rebuildHostForChain omits any
+        // device whose plugin does not resolve — so with one unresolvable VST in the chain, every later
+        // requestPluginState/requestPluginParams below read a DIFFERENT plugin and saved its state under
+        // this device's name.
+        //
+        // A DEVICE THE HOST IS NOT HOLDING IS NOT SKIPPED, and that distinction cost a rewrite. The first
+        // version of this `continue`d, which drops the device out of the save entirely — no retained
+        // bytes, no ExplicitAbsent record. save_rules requires the opposite: "unavailable capture emits a
+        // structured diagnostic and selects retained Present bytes or ExplicitAbsent". So an unhosted
+        // device takes the UNAVAILABLE path below, which is what sideFor exists for, and a project whose
+        // plugin is missing keeps the state it was last saved with.
+        std::optional<uint32_t> slot;
+        {
+          std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+          slot = daw::recordedHostIndexOf(*runtime, device.id);
         }
         // THREE ANSWERS AND A NON-ANSWER, per side. `save_rules`: "Present live capture replaces
         // that side; unavailable capture emits a structured diagnostic and selects retained
@@ -590,7 +608,7 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
         bool blobOk = false;
         {
           std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-          blobOk = runtime->controller.requestPluginState(hostIndex, blob);
+          blobOk = slot && runtime->controller.requestPluginState(*slot, blob);
         }
         const uint64_t blobBytes = blob.size();
         sideFor(daw::ArtifactKind::StateBlob, std::move(blob), blobOk);
@@ -605,7 +623,7 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
         bool paramsOk = false;
         {
           std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-          paramsOk = runtime->controller.requestPluginParams(hostIndex, wire, hostPluginName);
+          paramsOk = slot && runtime->controller.requestPluginParams(*slot, wire, hostPluginName);
         }
         std::vector<uint8_t> manifest;
         if (paramsOk && !wire.empty()) {
@@ -624,7 +642,6 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
             .field("bytes", blobBytes)
             .field("params_manifested", manifestCount)
             .field("ok", blobOk);
-        hostIndex++;
       }
     }
 

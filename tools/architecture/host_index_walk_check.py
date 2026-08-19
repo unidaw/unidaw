@@ -56,12 +56,6 @@ OWED = {
                              "Direct-with-a-real-path branch, so a chain whose first plugin loads by "
                              "path requests the SECOND plugin's bus layout under the first's id. Its "
                              "own comment claims it is 'the same walk the param read-back uses'.",
-    "engine_plugin_state_capture.cpp": "kind-only: one unresolvable VST earlier in the chain shifts "
-                                       "every later plugin's captured state onto the wrong plugin.",
-    "engine_save_project.cpp": "kind-only: requestPluginState/requestPluginParams address the wrong "
-                              "slot for every device after an unresolvable one.",
-    "engine_consumer.cpp": "kind-only: rebuilds the host's insert order to attribute meters, so "
-                           "meters land on the wrong device id whenever anything ahead is missing.",
     "engine_rt_helpers.cpp": "resolvability without the Direct branch -- modulation link targets.",
     "engine_device_commands.cpp": "resolvability without the Direct branch -- open editor, set param.",
     "engine_request_commands.cpp": "resolvability without the Direct branch -- params read-back.",
@@ -77,13 +71,34 @@ OWED = {
 }
 
 
+def reads_the_authority(text: str, match) -> bool:
+    """Is this host-index name ITERATING the recorded mapping rather than deriving one?
+
+    `runtime.hostSlotDevices` is the mapping the host was actually built with, recorded by
+    rebuildHostForChain. A loop over it is the CURE this check exists to push people towards, and it
+    naturally spells its induction variable `hostIndex` because that is exactly what the index is.
+    Flagging that would make the check punish its own remedy, and the only way to satisfy it would be
+    to rename the variable — silencing by spelling, which teaches nothing and hides the next real one.
+
+    So the distinction is READING the authority versus REBUILDING it, and it is drawn from the
+    statement the match sits in rather than from the file it sits in. This is deliberately NOT an
+    allowlist of converted files: a file that reads the mapping in one place and hand-rolls a walk in
+    another is still flagged for the second.
+    """
+    line_start = text.rfind("\n", 0, match.start()) + 1
+    line_end = text.find("\n", match.end())
+    if line_end == -1:
+        line_end = len(text)
+    return "hostSlotDevices" in text[line_start:line_end]
+
+
 def main() -> int:
     found = {}
     for name in sorted(os.listdir(APPS)):
         if not name.endswith((".cpp", ".h")) or name.endswith("_tests_main.cpp"):
             continue
         text = open(os.path.join(APPS, name), encoding="utf-8").read()
-        hits = [m for m in COUNTER.finditer(text)]
+        hits = [m for m in COUNTER.finditer(text) if not reads_the_authority(text, m)]
         if hits:
             found[name] = len(hits)
 
