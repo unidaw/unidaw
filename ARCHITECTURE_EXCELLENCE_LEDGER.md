@@ -7441,3 +7441,56 @@ an hour earlier, to establish that offline renders make no noise. I used it to d
 unnecessary for them and not to decide it was *dangerous* for them.
 
 The guard is `m_silentOutput && !m_offline`, and the comment beside it says what it cost.
+
+### Recording the mapping, and the four wrong answers it replaces
+
+`TrackRuntime` now carries `hostSlotDevices` — index is the host slot, value is the device — written
+by `rebuildHostForChain` in the same walk that decides which devices reach the host at all. That walk
+already knew the answer and threw it away, which is why thirteen sites were reconstructing it.
+
+**The placement is above the change guard, and that is the point.** The guard fires only when paths or
+names differ, because that is what the host cares about. The device-to-slot mapping can change while
+both stay identical — remove a device, add another loading the same plugin, and `pluginPaths` compares
+equal while every slot now belongs to someone else. Recording inside the guard would leave the mapping
+describing the previous chain: **the same stale-derivation failure, relocated into the field meant to
+end it.**
+
+All four wrong answers are now fixed:
+
+| site | what it was doing |
+|---|---|
+| `applyHostBypassStates` | counted every VST-*kind* device, so bypassing a missing plugin bypassed the real one holding slot 0 |
+| `hostedDevices` (capture) | numbered plugins as it walked, so one unresolvable VST shifted every later plugin's captured state onto the wrong plugin |
+| save | `requestPluginState`/`requestPluginParams` addressed the wrong slot for every device after an unresolvable one |
+| meters | attributed each meter to the wrong device id whenever anything ahead was missing |
+
+The first collapsed to a direct read — `hostSlotDevices` **is** the `{deviceId, hostIndex}` list that
+function was building, so the walk disappeared rather than being corrected.
+
+### A fix for a save bug that nearly became a save bug
+
+The save conversion's first version `continue`d when a device had no recorded slot. That is wrong, and
+the reason is four lines above it in the same file: `save_rules` requires that *"unavailable capture
+emits a structured diagnostic and selects retained Present bytes or ExplicitAbsent"*. Skipping the
+device drops it from the save entirely — no retained bytes, no explicit-absent record — so **a project
+whose plugin went missing would silently lose the state it was last saved with.**
+
+The corrected form keeps the old kind guard (a patcher node is still skipped) and routes an *unhosted*
+device down the unavailable path, which is what `sideFor` exists for. **The old kind-only walk was
+wrong about which slot; it was right about which devices to consider, and only the first half was
+mine to change.**
+
+### The ratchet punished its own remedy, and the fix was not to rename anything
+
+Converting the meters produced `for (size_t hostIndex = 0; ...)` over the recorded mapping — and
+`host_index_walk_check` flagged it, because its predicate matches a host-index name being incremented.
+The tempting fix is to rename the variable. That is silencing by spelling: it teaches the next person
+that the check is about identifiers, and hides the next real hit.
+
+The predicate now asks whether the statement **reads the authority** (`hostSlotDevices`) or
+**rebuilds** one. Deliberately not an allowlist of converted files — a file that reads the mapping in
+one place and hand-rolls a walk in another is still flagged for the second, which a control confirms
+by reintroducing exactly that in a file already converted.
+
+**A check that fires on the cure is not merely noisy; it is an argument for undoing the cure.** Owed
+is 7, down from 13.
