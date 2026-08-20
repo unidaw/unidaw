@@ -7797,3 +7797,40 @@ about what the check is actually waiting for, and the answer is different every 
 appearing, an event being written, a region being published. Sweeping them by pattern would convert
 fixed sleeps into fixed polls that wait for the wrong thing — which is precisely the defect
 `automation_readback` had, and which I then reproduced in my own fix for it.
+
+### A bad reproduction nearly became a regression report
+
+`device_chain_ui` aborted in the suite. Run standalone it failed too — so my first sentence was that
+this might be a real regression. It was not: I ran the binary from the source root, and ctest runs it
+from `build/`. From `build/` it passes in one second.
+
+**A failed reproduction is only evidence if the reproduction is faithful**, and "I ran the same
+binary" is not the same as "I ran it the same way". The cost here was nearly reporting a crash in code
+that was fine.
+
+The real cause was in the suite log all along: `Assertion failed: (sawVstInstrument)` after **31
+seconds**, against 1.08 standalone. A 500ms deadline to collect eight distinct UI diffs — a guess at
+how fast a machine is, rather than a statement about the engine — ending in a bare `assert()` that
+ctest reports as "Subprocess aborted", discarding the diagnostics the test prints immediately above
+it.
+
+Widened to fifteen seconds, matching `waitForShm` above it, which had already been widened for the
+same reason and says so. **The budget costs nothing when it is not needed** — the loop breaks the
+moment all eight arrive, and the passing case still runs in one second. A deadline that only fires on
+failure may be generous; one that fires on a slow *success* is a second thing the test measures that
+nobody asked for.
+
+### The right primitive on the wrong condition
+
+`ripple_undo` failed with *"redo produced no redo.applied event"* after every assertion above it had
+passed — and it was already calling `after_command`. That waits for the command's **journal line**,
+that the engine recorded the command. `redo.applied` is written to the engine log as the redo is
+applied, afterwards.
+
+**Using the correct wait helper on the wrong condition is the same proxy-wait as sleeping, with a poll
+in front of it.** The helper's presence reads as diligence and conceals the same gap.
+
+Six wait defects today, all in the same family and none of them a product defect. Every one produced a
+message that reads as one: "the engine did not save", "the command did not reach a sampler device",
+"redo produced no redo.applied event". **A check that reports its own impatience in the product's
+voice does more damage than a check that simply fails**, because the next person debugs the engine.
