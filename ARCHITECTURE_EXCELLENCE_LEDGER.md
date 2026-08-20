@@ -7751,3 +7751,23 @@ a fixed poll that also does not wait for the right thing.
 
 **A check that fails under load teaches people the suite is unreliable, which is more expensive than
 the bug it was written to catch.**
+
+### A track, assembled — and the default that had to be copied over
+
+`authoredTrackPlanFor` puts the pieces together: the track's own facts, its device plans, its routing,
+its automation and mirror targets. It is templated on the runtime for the reason stated when
+`devicePlansFor` was written — the walks it descends from were unreachable from any test *because*
+they demanded a live `TrackRuntime`, and a test now assembles a whole plan from a stand-in struct.
+
+**Routing is copied, and the reason is a distinction built earlier in this effort.**
+`AuthoredTrackPlan::routing` defaults to `declaresNothing()` — every lane None — specifically so that
+a plan which never set it says *"this track declares nothing"* rather than silently claiming the
+Master output that a **track's** default asserts. That distinction only survives if assembly copies
+the authored value; a control that deletes the copy fails on exactly that sentence.
+
+`isMaster` is passed in rather than inferred. The session knows which track is master; a track does
+not, and guessing it from an id would put that knowledge in a second place.
+
+Eight controls now cover the translation: dropped bypass, an index that counts every device, a
+collapsed occupancy reason, a fabricated patcher mapping, dropped disabled mirrors, a truncated uid,
+uncopied routing, and dropped aux-child facts.
