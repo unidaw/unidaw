@@ -7771,3 +7771,29 @@ not, and guessing it from an id would put that knowledge in a second place.
 Eight controls now cover the translation: dropped bypass, an index that counts every device, a
 collapsed occupancy reason, a fabricated patcher mapping, dropped disabled mirrors, a truncated uid,
 uncopied routing, and dropped aux-child facts.
+
+### The fourth wait defect, in a file that already knew
+
+`sampler_load` failed once in seven runs at 2.51s with *"no sampler.loaded event — the command did
+not reach a sampler device"* — a sentence that reads as a serious product defect and describes a load
+that was merely late. The change in that run was a header and a test, which cannot reach sampler
+loading.
+
+The cause was `sleep 1.2` before grepping the log for the event. **And the same file issues the same
+command correctly twenty lines further down**, through `after_command`, under a comment that reads
+*"after_command below waits for its own journal line. Neither needed a guess in between."* One of the
+two guessed anyway.
+
+That is the pattern in all four of today's wait defects: **the file, or the one beside it, already
+contained the correct form.** `automation_readback` stated the rule three lines above breaking it.
+`sampler_default_sound` had `wait_until` available and sourced. This one had a working call to the
+right helper in the same function. None of these were cases of nobody knowing better.
+
+Verified as the others were — by instrumentation and by duration. Zero timeout messages, and the
+poll's own timeout would have added twenty seconds rather than four.
+
+**Three checks fixed, and 87 files still contain a bare sleep.** Each of those is a separate question
+about what the check is actually waiting for, and the answer is different every time: a file
+appearing, an event being written, a region being published. Sweeping them by pattern would convert
+fixed sleeps into fixed polls that wait for the wrong thing — which is precisely the defect
+`automation_readback` had, and which I then reproduced in my own fix for it.
