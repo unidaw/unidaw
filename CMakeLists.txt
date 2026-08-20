@@ -1998,6 +1998,28 @@ target_include_directories(host_slot_rule_tests PRIVATE
   ${Boost_INCLUDE_DIRS}
 )
 add_test(NAME host_slot_rule COMMAND host_slot_rule_tests)
+# THE LIVE SESSION AS THE BUILDER'S INPUT. devicePlansFor is the translation the engine never had,
+# which is why the snapshot store has stood with zero production callers since it was built. It
+# decides nothing — every legality rule stays in buildExecutionSnapshot — and the one thing it
+# computes, the host slot, it computes by asking host_slot_rule.h.
+add_executable(authored_plan_tests
+  apps/authored_plan_tests_main.cpp
+  apps/execution_snapshot.cpp
+  apps/routing_graph.cpp
+  apps/automation_target.cpp
+  apps/device_chain.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+  apps/patcher_preset.cpp
+  apps/plugin_cache.cpp
+  apps/event_log.cpp
+)
+target_include_directories(authored_plan_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+add_test(NAME authored_plan COMMAND authored_plan_tests)
+set_tests_properties(authored_plan PROPERTIES TIMEOUT 60)
 set_tests_properties(host_slot_rule PROPERTIES TIMEOUT 60)
 # NO NEW HAND-ROLLED HOST-INDEX WALK. "Which plugin does host slot N mean" was implemented in
 # thirteen places and they had drifted into four live defects — a bypass sent to the wrong plugin,
