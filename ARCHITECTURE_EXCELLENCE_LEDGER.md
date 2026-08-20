@@ -7695,3 +7695,30 @@ and the sampler, and a negative control re-introduces the fabrication and fails.
 
 **Filling a field is not the same as knowing its value**, and a validator downstream makes the
 difference invisible until it produces a refusal nobody can explain.
+
+### Mirror and automation targets: projections, not derivations
+
+`ModTargetRef` already carries a globally unique device id and a 16-byte parameter uid — exactly the
+key R-MIRROR-INSTANCE-IDENTITY names — so `mirrorTargetsFor` is a projection. The track id it sits on
+is **deliberately dropped**: carrying it would make two mirrors distinguishable that the record says
+are one key, and would smuggle back the compact index the record says is never persisted as identity.
+
+**A disabled link still has a target.** `enabled` is a value the user is toggling, not a statement
+that the mirror does not exist. Dropping disabled links would make a mirror vanish from the plan and
+reappear on re-enable — a different session, not a paused one. A control that drops them fails.
+
+### Two guesses, one caught by reading and one by the compiler
+
+I nearly concluded that `parameterUid` had **no source in the tree**, because it appears only in
+`execution_snapshot.h`. That would have been the "absence of the expected mechanism" error again —
+searching for the wrong noun and reporting a gap. The uid16 does exist: the engine hashes a parameter
+identifier to it, `ModTargetRef` carries it, and the wire and the param mirror both use it. One more
+grep, for the name the engine actually uses, changed the answer from "blocked" to "already here".
+
+Then I wrote `ModTargetKind::TrackVolume` into a test. There is no such enumerator — the kinds are
+`VstParam`, `PatcherParam`, `PatcherMacro`. The compiler caught it immediately, which is the cheap
+case; the expensive version of the same habit is the one above, where a wrong noun produces a
+confident conclusion instead of a build error.
+
+**Both were guesses about names in a codebase I had already read.** The difference between them is
+only which side of the language boundary the guess landed on.
