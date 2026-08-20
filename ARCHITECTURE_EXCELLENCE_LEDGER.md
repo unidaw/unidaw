@@ -7834,3 +7834,40 @@ Six wait defects today, all in the same family and none of them a product defect
 message that reads as one: "the engine did not save", "the command did not reach a sampler device",
 "redo produced no redo.applied event". **A check that reports its own impatience in the product's
 voice does more damage than a check that simply fails**, because the next person debugs the engine.
+
+### A hypothesis about my own change, refuted by the failing run's own evidence
+
+On a quiet machine (load 6.9 against 543 before the reboot) the suite came back 248/249, failing
+`elektron_ops` — *"a conditional render is NOT byte-identical across block sizes."*
+
+**My own change was a plausible cause, and the mechanism was specific.** The segment walk in
+`produce_block` used to derive a device's host slot from the chain and a resolver, both available the
+instant the chain existed. It now reads `hostSlotDevices`, which `rebuildHostForChain` records. Any
+window where the chain is populated and the mapping is empty would drop every hosted device out of
+its segment — for a number of blocks that depends on the block size, which is exactly the failure's
+shape.
+
+It passed 5/5 standalone, so re-running proved nothing. I put a probe in the producer to fire if that
+window ever occurred, rather than reasoning it away.
+
+**The probe was unnecessary, because the failing run's kept evidence already answered it:
+`"plugins":0` in all six of its engine logs, and no VST device anywhere in its fixture.**
+`elektron_ops` hosts no plugins at all, so the walk that changed cannot reach it. Refuted by the
+artifacts of the failure itself, not by another run.
+
+The probe came out. Left in, it would scan the chain **every block** for any track without plugins —
+which is the common case — to answer a question already settled.
+
+### And a near-miss on how I read the probe
+
+My first check for whether it fired was `grep` over the ctest log. It found nothing, and that is not
+evidence: **ctest prints output only on failure**, so the engine logs of 248 passing checks were never
+in that file. This ledger already records estimating from artifacts a harness keeps only on failure;
+this is the same shape one step along — concluding from a log that could not have contained the
+answer either way.
+
+The second attempt, running the engine directly, loaded no plugins and said so in its own output —
+also unable to answer. The third found the real evidence.
+
+**Two of three attempts to read a measurement produced a confident-looking zero from a place the
+signal could not appear.**
