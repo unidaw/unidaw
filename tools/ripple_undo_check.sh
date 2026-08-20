@@ -335,6 +335,12 @@ echo "  runtime agrees: the published read-back matches too ($RT_UNDONE)"
 
 # ---- REDO puts it back, or the entry was consumed rather than moved.
 after_command "$TMP" cli do redo || true
+# AND THEN FOR THE EVENT, which is not what after_command waits for. after_command waits for the
+# command's JOURNAL line — that the engine recorded the command — while redo.applied is written to
+# the engine log as the redo is applied, afterwards. Using the right primitive on the wrong condition
+# is the same proxy-wait as sleeping, with a poll in front of it: this failed once in seven runs with
+# "redo produced no redo.applied event", after every assertion above it had already passed.
+wait_for_event "$TMP/eng.log" '"event":"redo.applied"' 80 "the redo.applied event" || true
 grep -q '"event":"redo.applied"' "$TMP/eng.log" || fail "redo produced no redo.applied event"
 REDONE="$(state redone)"
 [ "$REDONE" = "$AFTER" ] || \

@@ -129,7 +129,18 @@ print("NONE")
 # ---- LOADING A SAMPLE MINTS A SOURCE AND A SLOT.
 cli do sampler-load --track 0 --device 7 --file tone.wav --root 60 --fixed-pitch \
   >"$TMP/load.json" 2>&1 || fail "sampler-load exited non-zero: $(cat "$TMP/load.json")"
-sleep 1.2
+# WAIT FOR THE EVENT, DO NOT SLEEP AT IT. This was `sleep 1.2`, and under a loaded machine the event
+# has not been written yet — so the assertion below reported "the command did not reach a sampler
+# device", which reads as a product defect for a load that was merely late. Observed once in seven
+# full runs, at 2.51s, while nothing about the sampler had changed.
+#
+# The file already knew: the SECOND sampler-load, twenty lines down, goes through after_command, and
+# the comment above it says "after_command below waits for its own journal line. Neither needed a
+# guess in between." One of the two guessed anyway.
+#
+# Bounded, and `|| true` on purpose: the poll removes the race, it does not stand in for the check —
+# on timeout the assertion still runs and still fails with its own message.
+wait_for_event "$TMP/eng.log" '"event":"sampler.loaded"' 80 "the sampler.loaded event" || true
 grep -q '"event":"sampler.loaded"' "$TMP/eng.log" || \
   fail "no sampler.loaded event — the command did not reach a sampler device:
         $(grep -o '\"event\":\"sampler[a-z._]*\"[^}]*' "$TMP/eng.log" | tail -3)"

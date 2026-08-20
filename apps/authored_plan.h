@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -136,6 +137,41 @@ inline std::vector<AutomationTargetPlan> automationTargetsFor(
     out.push_back(plan);
   }
   return out;
+}
+
+
+// ONE TRACK, ASSEMBLED. The pieces above plus the facts a track carries about itself.
+//
+// TEMPLATED ON THE RUNTIME, for the reason stated at the top of this file: the walks this descends
+// from were untestable because they demanded a live TrackRuntime. `Runtime` must expose `trackId`,
+// `isAuxChild`, `auxParentTrackId`, `auxBusIndex` (atomics or plain values — both are read with a
+// helper below) and `track`, with `track.chain.devices`, `track.routing`, `track.modRegistry.links`
+// and `track.automationClips`.
+//
+// ROUTING IS COPIED, NOT DEFAULTED. AuthoredTrackPlan's `routing` member defaults to
+// declaresNothing() — every lane None — precisely so that a plan which forgot to set it says "this
+// track declares nothing" instead of silently claiming the Master output a TRACK defaults to. That
+// distinction only holds if assembly copies the authored value, which is what this does.
+template <typename T>
+uint32_t plainValue(const std::atomic<T>& v) { return static_cast<uint32_t>(v.load(std::memory_order_relaxed)); }
+inline uint32_t plainValue(uint32_t v) { return v; }
+inline bool plainFlag(const std::atomic<bool>& v) { return v.load(std::memory_order_relaxed); }
+inline bool plainFlag(bool v) { return v; }
+
+template <typename Runtime>
+AuthoredTrackPlan authoredTrackPlanFor(const Runtime& runtime, bool isMaster,
+                                       const AuthoredPlanSources& sources) {
+  AuthoredTrackPlan plan;
+  plan.trackId = runtime.trackId;
+  plan.isMaster = isMaster;
+  plan.isAuxChild = plainFlag(runtime.isAuxChild);
+  plan.auxParentTrackId = plainValue(runtime.auxParentTrackId);
+  plan.auxBusIndex = plainValue(runtime.auxBusIndex);
+  plan.devices = devicePlansFor(runtime.track.chain.devices, sources);
+  plan.routing = runtime.track.routing;
+  plan.automationTargets = automationTargetsFor(runtime.track.automationClips);
+  plan.mirrorTargets = mirrorTargetsFor(runtime.track.modRegistry.links);
+  return plan;
 }
 
 }  // namespace daw

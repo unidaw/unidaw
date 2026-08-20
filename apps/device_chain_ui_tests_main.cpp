@@ -399,8 +399,16 @@ int main() {
   if (ringUiOut.mask != 0) {
     const auto start = std::chrono::steady_clock::now();
     daw::EventEntry diffEntry{};
-    while (std::chrono::steady_clock::now() - start <
-           std::chrono::milliseconds(500)) {
+    // THE BUDGET COSTS NOTHING WHEN IT IS NOT NEEDED, because this loop breaks the moment all eight
+    // diffs have arrived. It was 500ms — a guess at how fast a machine is, rather than a statement
+    // about the engine — and under a parallel ctest it lost: 31 seconds against 1.08 standalone,
+    // ending in `Assertion failed: (sawVstInstrument)`, a bare abort that ctest reports as
+    // "Subprocess aborted" with none of the diagnostics printed just below it.
+    //
+    // Fifteen seconds matches waitForShm above, widened for the same reason and saying so. A deadline
+    // that only fires on failure may be generous; one that fires on a slow SUCCESS is a second thing
+    // the test measures that nobody asked it to.
+    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(15)) {
       if (!daw::ringPop(ringUiOut, diffEntry)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;

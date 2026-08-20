@@ -148,6 +148,47 @@ int main() {
            "plan and reappear on re-enable, which is a different session, not a paused one");
   }
 
+  // A WHOLE TRACK, ASSEMBLED FROM A STAND-IN RUNTIME. This is the point of templating on the
+  // runtime: the walks this descends from could not be reached from a test at all, because they
+  // demanded a live TrackRuntime with a plugin host behind it.
+  {
+    struct FakeTrack {
+      daw::TrackChain chain;
+      daw::TrackRouting routing;
+      daw::ModRegistry modRegistry;
+      std::vector<daw::AutomationClip> automationClips;
+    };
+    struct FakeRuntime {
+      uint32_t trackId = 0;
+      bool isAuxChild = false;
+      uint32_t auxParentTrackId = 0;
+      uint32_t auxBusIndex = 0;
+      FakeTrack track;
+    };
+    FakeRuntime rt;
+    rt.trackId = 4;
+    rt.isAuxChild = true;
+    rt.auxParentTrackId = 2;
+    rt.auxBusIndex = 3;
+    rt.track.chain.devices = {vst(7, 0, "eq")};
+    rt.track.routing.audioOut = {daw::TrackRouteKind::Track, 9, 0};
+
+    const auto plan = daw::authoredTrackPlanFor(rt, /*isMaster=*/false, scanKnowing({0}));
+    expect(plan.trackId == 4 && plan.isAuxChild && plan.auxParentTrackId == 2 &&
+               plan.auxBusIndex == 3,
+           "the track's own facts are carried");
+    expect(!plan.isMaster, "and master-ness is told to it, not guessed from the id");
+    expect(plan.devices.size() == 1 && plan.devices[0].compactIndex == 0,
+           "its devices are planned with their host slots");
+
+    // ROUTING IS COPIED, NOT DEFAULTED. AuthoredTrackPlan defaults to declaresNothing() — every
+    // lane None — so a plan that forgot to copy would silently claim the Master output that a TRACK
+    // defaults to. Asserting the authored value is what makes that distinction hold.
+    expect(plan.routing.audioOut.kind == daw::TrackRouteKind::Track &&
+               plan.routing.audioOut.trackId == 9,
+           "the authored routing is carried, not replaced by either default");
+  }
+
   // AN EMPTY CHAIN PRODUCES AN EMPTY PLAN, so "no devices" cannot be read as "one device at slot 0".
   expect(daw::devicePlansFor({}, scanKnowing({0})).empty(), "an empty chain plans nothing");
 
