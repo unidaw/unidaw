@@ -7871,3 +7871,23 @@ also unable to answer. The third found the real evidence.
 
 **Two of three attempts to read a measurement produced a confident-looking zero from a place the
 signal could not appear.**
+
+### Two checks failed, and neither meant what its name suggested
+
+Three runs of one tree on a rebooted machine: `elektron_ops` failed, then 249/249 green, then
+`offline_render` failed. My first framing was "both are render-determinism checks", and that was
+wrong about the second one.
+
+`offline_render`'s **offline leg passed and printed `deterministic: two renders are byte-identical`.**
+What failed was its REALTIME comparison — 13 onsets against 9, one interval of 44100 frames where a
+beat is 22050, i.e. a note missing from the live capture. The engine's own telemetry in the kept
+evidence names the cause: `2 dropout callback(s) ... worst shortfall 2 blocks`, 2 of 608 callbacks
+that had a track to play. **A starved callback drops a block, and a dropped block is a missing note.**
+
+So the two failures are different classes with different measured causes, and neither is the change:
+`elektron_ops` hosts no plugins at all, and `offline_render`'s failure is in the realtime leg with
+underruns logged beside it. Three harness agents are running on this machine at load 8.5.
+
+**Reading a check's NAME as its failure mode cost the first framing.** `offline_render` failing does
+not mean the offline render failed; the check has two legs and the one that broke was the other one.
+The distinction was one line up in the same output, already printed as PASS.
