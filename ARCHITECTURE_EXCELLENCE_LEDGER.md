@@ -7652,3 +7652,46 @@ poll that always succeeds look identical.
 Caught by asking for the JSON shape rather than assuming it, and confirmed by timing: the check now
 completes in 5 seconds, not 35. **A wait is verified by how long it takes, not by whether the thing
 after it passed.**
+
+---
+
+## Toward publication: the translation the engine never had
+
+R-HOST-PLAN-AUTHORITY says what publication must be: *"Under the command-thread writer lock, an
+authored mutation or undo/redo document is applied to a candidate, the whole affected snapshot is
+compiled and globally validated, and one atomic snapshot publication commits both; failure or
+revision exhaustion leaves the prior document, high-water mark, and snapshot authoritative."*
+
+**Document and snapshot commit together or not at all.** That is the transaction the rest of step 4
+is building toward, and compiling a candidate needs the authored state in the form the builder
+accepts — a form nothing in the engine produced. That absence is why the snapshot store has stood
+with zero production callers since it was built.
+
+`devicePlansFor` is that translation, and it **decides nothing**. Every legality rule stays in
+`buildExecutionSnapshot`, which refuses a candidate rather than repairing it. The one thing it
+computes is the host slot, and it computes that by asking `host_slot_rule.h` — so a plan cannot
+disagree with the host about which device holds slot N, which is the whole reason that rule was given
+one home.
+
+It is templated on the runtime so it can be exercised without an engine. That is not a testing
+convenience: the two host-slot walks it descends from were unreachable from any test *precisely*
+because they demanded a live `TrackRuntime`, and building the same wall again would have earned the
+same result.
+
+### I invented a mapping to fill a field, and caught it by reading the validator
+
+`DevicePlan` carries `patcherNodeMapping`, local node to pooled node. My first version filled it with
+`{device.patcherNodeId, device.patcherNodeId}` — an identity mapping, written because the field
+existed and had to hold something.
+
+Reading what the validator does with it killed that: the pooled id must EXIST in the candidate's
+patcher graph, must not be `kPatcherInvalidNodeIndex`, and must be globally unique. Those are facts
+about the pool, which the translation cannot see. **The identity mapping would have been accepted
+whenever a device's own node id happened to also be a pooled id, and rejected otherwise — for reasons
+having nothing to do with the session.**
+
+A translation that cannot know a fact must ask for it. It is supplied now, beside the plugin resolver
+and the sampler, and a negative control re-introduces the fabrication and fails.
+
+**Filling a field is not the same as knowing its value**, and a validator downstream makes the
+difference invisible until it produces a refusal nobody can explain.
