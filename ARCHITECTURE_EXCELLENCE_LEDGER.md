@@ -7722,3 +7722,32 @@ confident conclusion instead of a build error.
 
 **Both were guesses about names in a codebase I had already read.** The difference between them is
 only which side of the language boundary the guess landed on.
+
+### Two checks failed together, which is not what two flakes look like
+
+`sampler_default_sound` and `rust_tests_check` both failed in one run, having both passed the previous
+nine. **Failing together is the signal**: two independent intermittents coinciding is unlikely, an
+environmental cause explains both. Both were in the first four tests, and the Rust suite took 99
+seconds against its usual 66 — which is what a loaded machine looks like from outside.
+
+The engine log said `Failed to receive control header`, with an underrun logged beside it. The check
+reported *"the engine did not save"*, which reads as a product defect and was not one.
+
+The cause was in the check: `sleep 1.2`, save, `sleep 1.5`, kill, then assert the file exists. **Two
+fixed sleeps bracketing an IPC round trip.** Under load the save is issued before the engine will take
+it, or the kill lands before the write completes — and either way the assertion is true of a save that
+was merely late.
+
+It now waits on the condition it asserts: the file existing, bounded at 30s. Verified the way this
+ledger now insists on — by instrumenting the poll, which satisfied on its **second** iteration rather
+than timing out, and by duration: 49s against a historical ~50s. Removing the fixed sleep made it
+marginally faster, not half a minute slower.
+
+**This is the third wait defect found today** — a proxy poll in `automation_readback`, a predicate that
+could never match in my own fix for it, and now a pair of bare sleeps. `87 of the check scripts still
+contain a bare sleep`, which is the population this belongs to and is recorded rather than swept:
+each needs the same question asked, and answering it wholesale by pattern is how a fixed sleep becomes
+a fixed poll that also does not wait for the right thing.
+
+**A check that fails under load teaches people the suite is unreliable, which is more expensive than
+the bug it was written to catch.**
