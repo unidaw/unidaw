@@ -114,9 +114,17 @@ grep -q '"event":"project.load"' "$TMP/eng.log" 2>/dev/null || \
 # THE ONLY COMMAND. No sampler-env, deliberately: sending one would set the very thing whose
 # default is under test, and the check would pass on the command rather than on the default.
 "$CLI" do sampler-load --track 0 --file s.wav --root 60 >/dev/null 2>&1
-sleep 1.2
+# WAIT FOR THE FILE, DO NOT SLEEP AT IT. This was `sleep 1.2`, save, `sleep 1.5`, kill, then assert
+# the file exists — two fixed sleeps bracketing an IPC round trip. Under a loaded machine neither is
+# long enough: the save is issued before the engine is ready to take it, or the kill lands before the
+# write completes, and the check then reports "the engine did not save" for a save that was merely
+# late. Observed once in ten full runs, in the first four tests, beside a Rust suite taking 99s
+# instead of its usual 66 — which is what load looks like from inside a fixed sleep.
+#
+# The condition asserted is that the file exists, so that is the condition waited on.
 "$CLI" do save loaded >/dev/null 2>&1
-sleep 1.5
+saved() { [ -f "$TMP/loaded.uniproj.json" ]; }
+wait_until 30 saved || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 [ -f "$TMP/loaded.uniproj.json" ] || fail "the engine did not save — see $TMP/eng.log"
 

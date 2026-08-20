@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -82,6 +83,58 @@ inline std::vector<DevicePlan> devicePlansFor(const std::vector<Device>& devices
         }
         out.push_back(std::move(plan));
       });
+  return out;
+}
+
+
+// ONE TRACK'S MIRROR TARGETS — {globally unique device id, parameter uid16}, and nothing else.
+//
+// R-MIRROR-INSTANCE-IDENTITY: "The mirror key is {projectGlobalStableDeviceId, parameterUid16};
+// value storage carries no track id or compact plugin index because the device id is globally
+// unique ... identical plugin instances with the same parameter uid remain independent."
+//
+// ModTargetRef already carries exactly those two fields, so this is a projection and not a
+// derivation. The track id it sits on is deliberately dropped: carrying it would make two mirrors
+// distinguishable that the record says are the same key, and re-introduce the compact index the
+// record says is never persisted as identity.
+//
+// A DISABLED LINK STILL HAS A TARGET. `enabled` is a value the user is toggling, not a statement
+// that the mirror does not exist — dropping disabled links here would make a mirror vanish from the
+// plan and reappear on re-enable, which is a different session, not a paused one.
+inline std::vector<MirrorTargetPlan> mirrorTargetsFor(const std::vector<ModLink>& links) {
+  std::vector<MirrorTargetPlan> out;
+  out.reserve(links.size());
+  for (const auto& link : links) {
+    if (link.target.kind != ModTargetKind::VstParam) {
+      continue;  // only a plugin parameter has a uid16 to be keyed by
+    }
+    MirrorTargetPlan plan;
+    plan.stableDeviceId = link.target.deviceId;
+    std::copy(std::begin(link.target.uid16), std::end(link.target.uid16),
+              plan.parameterUid.begin());
+    out.push_back(plan);
+  }
+  return out;
+}
+
+// ONE TRACK'S AUTOMATION TARGETS, carried as authored.
+//
+// A lane's target is already a stable AutomationTarget; the plan adds only the disabled metadata,
+// which R-PROJECT-TARGET-MIGRATION requires be KEPT rather than dropped — "an unresolvable legacy
+// compact target [must] survive as itself, the original index and the reason, so a project that
+// could not be migrated says so instead of looking like it never had automation".
+//
+// This does not decide whether a target resolves. That is the builder's, and asking it here would
+// put the same question in two places.
+inline std::vector<AutomationTargetPlan> automationTargetsFor(
+    const std::vector<AutomationClip>& clips) {
+  std::vector<AutomationTargetPlan> out;
+  out.reserve(clips.size());
+  for (const auto& clip : clips) {
+    AutomationTargetPlan plan;
+    plan.target = clip.target();
+    out.push_back(plan);
+  }
   return out;
 }
 

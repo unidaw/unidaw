@@ -121,6 +121,33 @@ int main() {
            "when supplied, the local->pooled mapping is carried verbatim");
   }
 
+  // A MIRROR IS KEYED BY DEVICE AND PARAMETER, WITH NO TRACK ID. R-MIRROR-INSTANCE-IDENTITY: the
+  // device id is globally unique, so carrying a track id would make two mirrors distinguishable that
+  // the record says are one key — and would smuggle back the compact index it says is never
+  // persisted as identity.
+  {
+    daw::ModLink a;
+    a.target.kind = daw::ModTargetKind::VstParam;
+    a.target.deviceId = 7;
+    a.target.uid16[0] = 0xAB;
+    a.target.uid16[15] = 0xCD;
+    daw::ModLink disabled = a;
+    disabled.target.deviceId = 9;
+    disabled.enabled = false;
+    daw::ModLink notAParam;
+    notAParam.target.kind = daw::ModTargetKind::PatcherMacro;
+    notAParam.target.deviceId = 11;
+
+    const auto mirrors = daw::mirrorTargetsFor({a, disabled, notAParam});
+    expect(mirrors.size() == 2, "a plugin-parameter link becomes a mirror; a patcher-macro one does not");
+    expect(mirrors[0].stableDeviceId == 7 && mirrors[0].parameterUid[0] == 0xAB &&
+               mirrors[0].parameterUid[15] == 0xCD,
+           "the key is the device id and the whole 16-byte uid, carried verbatim");
+    expect(mirrors[1].stableDeviceId == 9,
+           "A DISABLED LINK STILL HAS A TARGET — dropping it would make a mirror vanish from the "
+           "plan and reappear on re-enable, which is a different session, not a paused one");
+  }
+
   // AN EMPTY CHAIN PRODUCES AN EMPTY PLAN, so "no devices" cannot be read as "one device at slot 0".
   expect(daw::devicePlansFor({}, scanKnowing({0})).empty(), "an empty chain plans nothing");
 
